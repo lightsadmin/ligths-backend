@@ -79,7 +79,7 @@ const Goal = mongoose.model("Goal", goalSchema);
 const createUserModel = (userName) => {
   const collectionName = `${userName}`;
 
-  console.log(`🔍 Creating model for collection: ${collectionName}`); // Add this log
+  console.log(`🔍 Creating model for collection: ${collectionName}`);
 
   // ✅ Check if model already exists
   if (mongoose.models[collectionName]) {
@@ -121,66 +121,6 @@ const createUserModel = (userName) => {
   console.log(`✅ Creating new model for: ${collectionName}`);
   return mongoose.model(collectionName, UserSchema, collectionName);
 };
-
-app.post("/api/register", async (req, res) => {
-  console.log("✅ Register route hit!");
-  const {
-    firstName,
-    lastName,
-    userName,
-    email,
-    password,
-    age,
-    retirementAge,
-    phoneNumber,
-    country,
-  } = req.body;
-
-  try {
-    if (!userName || !email || !password) {
-      return res
-        .status(400)
-        .json({ error: "Username, email, and password are required." });
-    }
-
-    // Check if the username already exists in the database
-    const collections = await mongoose.connection.db
-      .listCollections()
-      .toArray();
-    const existingCollection = collections.some(
-      (col) => col.name === `${userName}`
-    );
-
-    if (existingCollection) {
-      return res.status(400).json({ error: "Username already taken!" });
-    }
-
-    // Create a hashed password
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    // Create User Model for the new user
-    const UserModel = createUserModel(userName);
-    const newUser = new UserModel({
-      firstName,
-      lastName,
-      userName,
-      email,
-      password: hashedPassword,
-      age,
-      retirementAge,
-      phoneNumber,
-      country,
-    });
-
-    // Save User in a new collection with username
-    await newUser.save();
-
-    res.status(201).json({ message: "User registered successfully!" });
-  } catch (error) {
-    console.error("Error during registration:", error);
-    res.status(500).json({ error: "Internal Server Error" });
-  }
-});
 
 app.post("/api/register", async (req, res) => {
   console.log("✅ Register route hit!");
@@ -372,6 +312,7 @@ app.get("/transactions/:username", async (req, res) => {
     res.status(500).json({ error: "Internal Server Error" });
   }
 });
+
 // 📌 **User Login Route**
 app.post("/api/login", async (req, res) => {
   console.log("🔐 Login route hit!");
@@ -543,6 +484,7 @@ app.post("/api/check-email", async (req, res) => {
     res.status(500).json({ error: "Internal Server Error" });
   }
 });
+
 app.delete("/transactions/:username/:id", async (req, res) => {
   const { username, id } = req.params;
   console.log(`🗑️ Deleting transaction with ID: ${id} for user: ${username}`);
@@ -807,17 +749,102 @@ app.post("/goals/:username", async (req, res) => {
   const { username } = req.params;
   const goalData = req.body;
 
+  console.log(`Received goal data for ${username}:`, goalData);
+
   try {
+    // Validate required fields
+    const requiredFields = ["name", "presentCost", "returnRate"];
+    const missingFields = requiredFields.filter((field) => !goalData[field]);
+    if (missingFields.length > 0) {
+      return res.status(400).json({
+        error: `Missing required fields: ${missingFields.join(", ")}`,
+      });
+    }
+
+    // Ensure numeric fields are valid
+    const numericFields = [
+      "presentCost",
+      "returnRate",
+      "currentSip",
+      "inflation",
+      "childCurrentAge",
+      "goalAge",
+      "years",
+      "currentAge",
+      "futureCost", // Add calculated fields to numeric validation
+      "required",
+      "futureValueOfSavings",
+      "monthlySIP",
+    ];
+    for (const field of numericFields) {
+      // Only validate if the field exists in goalData and is not a valid number
+      if (
+        goalData[field] !== undefined &&
+        goalData[field] !== null &&
+        isNaN(parseFloat(goalData[field]))
+      ) {
+        return res
+          .status(400)
+          .json({ error: `${field} must be a valid number` });
+      }
+    }
+
+    // Explicitly create the new goal object, parsing values and handling defaults/optionality
     const newGoal = new Goal({
-      ...goalData,
       userName: username,
-      calculatedAt: new Date().toLocaleString(),
+      name: goalData.name,
+      customName: goalData.customName || undefined, // Set to undefined if empty string or null
+      presentCost: parseFloat(goalData.presentCost),
+      // Handle optional fields: if they exist, parse them, otherwise leave undefined/null
+      childCurrentAge: goalData.childCurrentAge
+        ? parseFloat(goalData.childCurrentAge)
+        : undefined,
+      goalAge: goalData.goalAge ? parseFloat(goalData.goalAge) : undefined,
+      years: goalData.years ? parseFloat(goalData.years) : undefined,
+      currentAge: goalData.currentAge
+        ? parseFloat(goalData.currentAge)
+        : undefined,
+      inflation: parseFloat(goalData.inflation || 7.5), // Use default if frontend doesn't send
+      returnRate: parseFloat(goalData.returnRate),
+      currentSip: parseFloat(goalData.currentSip || 0), // Use default if frontend sends empty/null
+      investmentType: goalData.investmentType || "SIP/MF",
+      // Include calculated fields from frontend
+      futureCost: goalData.futureCost
+        ? parseFloat(goalData.futureCost)
+        : undefined,
+      required: goalData.required ? parseFloat(goalData.required) : undefined,
+      futureValueOfSavings: goalData.futureValueOfSavings
+        ? parseFloat(goalData.futureValueOfSavings)
+        : undefined,
+      monthlySIP: goalData.monthlySIP
+        ? parseFloat(goalData.monthlySIP)
+        : undefined,
+      calculatedAt: new Date().toLocaleString(), // Server-side timestamp
+      // createdAt is handled by Mongoose default
     });
 
     const savedGoal = await newGoal.save();
     res.status(201).json(savedGoal);
   } catch (error) {
-    console.error("Error creating goal:", error);
+    console.error(`Error creating goal for ${username}:`, error.stack); // This is key for debugging on server logs
+    if (error.name === "ValidationError") {
+      // Mongoose validation error (e.g., required field missing, type mismatch)
+      console.error("Mongoose Validation errors:", error.errors);
+      // Construct a more user-friendly error message from Mongoose validation errors
+      const errors = Object.keys(error.errors).map(
+        (key) => error.errors[key].message
+      );
+      return res
+        .status(400)
+        .json({ error: `Validation failed: ${errors.join(", ")}` });
+    } else if (error.name === "MongoError") {
+      // MongoDB specific error (e.g., connection issue, duplicate key)
+      console.error("MongoDB error:", error.message);
+      return res
+        .status(500)
+        .json({ error: "Database operation failed. Please try again." });
+    }
+    // Catch-all for any other unexpected errors
     res.status(500).json({ error: "Internal Server Error" });
   }
 });
@@ -967,6 +994,16 @@ app.post("/calculate-interest", verifyToken, async (req, res) => {
     res.json({ message: "Interest calculation triggered successfully" });
   } catch (err) {
     res.status(500).json(err);
+  }
+});
+
+// 📌 Get All Goals (public)
+app.get("/goals", async (req, res) => {
+  try {
+    const allGoals = await Goal.find({});
+    res.json(allGoals);
+  } catch (error) {
+    res.status(500).json({ error: "Failed to fetch all goals" });
   }
 });
 
