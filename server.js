@@ -752,16 +752,31 @@ app.post("/goals/:username", async (req, res) => {
   console.log(`Received goal data for ${username}:`, goalData);
 
   try {
-    // Validate required fields
+    // Validate required fields - MODIFIED LOGIC HERE
     const requiredFields = ["name", "presentCost", "returnRate"];
-    const missingFields = requiredFields.filter((field) => !goalData[field]);
+    const missingFields = requiredFields.filter((field) => {
+      // Check for null or undefined values
+      if (goalData[field] === null || goalData[field] === undefined) {
+        return true; // It's truly missing or null
+      }
+      // For string fields, also check for empty strings
+      if (
+        typeof goalData[field] === "string" &&
+        goalData[field].trim() === ""
+      ) {
+        return true; // It's an empty string
+      }
+      // For numbers, 0 is a valid value, so it's not considered missing here.
+      return false; // The field is present and valid
+    });
+
     if (missingFields.length > 0) {
       return res.status(400).json({
         error: `Missing required fields: ${missingFields.join(", ")}`,
       });
     }
 
-    // Ensure numeric fields are valid
+    // Ensure numeric fields are valid (existing logic, kept for completeness)
     const numericFields = [
       "presentCost",
       "returnRate",
@@ -771,13 +786,12 @@ app.post("/goals/:username", async (req, res) => {
       "goalAge",
       "years",
       "currentAge",
-      "futureCost", // Add calculated fields to numeric validation
+      "futureCost",
       "required",
       "futureValueOfSavings",
       "monthlySIP",
     ];
     for (const field of numericFields) {
-      // Only validate if the field exists in goalData and is not a valid number
       if (
         goalData[field] !== undefined &&
         goalData[field] !== null &&
@@ -789,13 +803,12 @@ app.post("/goals/:username", async (req, res) => {
       }
     }
 
-    // Explicitly create the new goal object, parsing values and handling defaults/optionality
+    // Explicitly create the new goal object (existing logic, kept for completeness)
     const newGoal = new Goal({
       userName: username,
       name: goalData.name,
-      customName: goalData.customName || undefined, // Set to undefined if empty string or null
+      customName: goalData.customName || undefined,
       presentCost: parseFloat(goalData.presentCost),
-      // Handle optional fields: if they exist, parse them, otherwise leave undefined/null
       childCurrentAge: goalData.childCurrentAge
         ? parseFloat(goalData.childCurrentAge)
         : undefined,
@@ -804,11 +817,10 @@ app.post("/goals/:username", async (req, res) => {
       currentAge: goalData.currentAge
         ? parseFloat(goalData.currentAge)
         : undefined,
-      inflation: parseFloat(goalData.inflation || 7.5), // Use default if frontend doesn't send
+      inflation: parseFloat(goalData.inflation || 7.5),
       returnRate: parseFloat(goalData.returnRate),
-      currentSip: parseFloat(goalData.currentSip || 0), // Use default if frontend sends empty/null
+      currentSip: parseFloat(goalData.currentSip || 0),
       investmentType: goalData.investmentType || "SIP/MF",
-      // Include calculated fields from frontend
       futureCost: goalData.futureCost
         ? parseFloat(goalData.futureCost)
         : undefined,
@@ -819,18 +831,15 @@ app.post("/goals/:username", async (req, res) => {
       monthlySIP: goalData.monthlySIP
         ? parseFloat(goalData.monthlySIP)
         : undefined,
-      calculatedAt: new Date().toLocaleString(), // Server-side timestamp
-      // createdAt is handled by Mongoose default
+      calculatedAt: new Date().toLocaleString(),
     });
 
     const savedGoal = await newGoal.save();
     res.status(201).json(savedGoal);
   } catch (error) {
-    console.error(`Error creating goal for ${username}:`, error.stack); // This is key for debugging on server logs
+    console.error(`Error creating goal for ${username}:`, error.stack);
     if (error.name === "ValidationError") {
-      // Mongoose validation error (e.g., required field missing, type mismatch)
       console.error("Mongoose Validation errors:", error.errors);
-      // Construct a more user-friendly error message from Mongoose validation errors
       const errors = Object.keys(error.errors).map(
         (key) => error.errors[key].message
       );
@@ -838,13 +847,11 @@ app.post("/goals/:username", async (req, res) => {
         .status(400)
         .json({ error: `Validation failed: ${errors.join(", ")}` });
     } else if (error.name === "MongoError") {
-      // MongoDB specific error (e.g., connection issue, duplicate key)
       console.error("MongoDB error:", error.message);
       return res
         .status(500)
         .json({ error: "Database operation failed. Please try again." });
     }
-    // Catch-all for any other unexpected errors
     res.status(500).json({ error: "Internal Server Error" });
   }
 });
