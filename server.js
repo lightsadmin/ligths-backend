@@ -51,26 +51,26 @@ const investmentSchema = new mongoose.Schema({
 
 const Investment = mongoose.model("Investment", investmentSchema);
 
-// 📌 Define Goal Schema
+// 📌 Define Goal Schema (NEW - for GoalCalculator module)
 const goalSchema = new mongoose.Schema({
-  userName: { type: String, required: true },
-  name: { type: String, required: true },
-  customName: { type: String },
+  userName: { type: String, required: true }, // Link to the user who owns this goal
+  name: { type: String, required: true }, // e.g., "B Education", "Dream Home", "Custom Goal"
+  customName: { type: String }, // For custom goals
   presentCost: { type: Number, required: true },
   childCurrentAge: { type: Number },
   goalAge: { type: Number },
-  years: { type: Number },
+  years: { type: Number }, // Years to reach the goal
   currentAge: { type: Number },
   inflation: { type: Number, default: 7.5 },
   returnRate: { type: Number, required: true },
-  currentSip: { type: Number, default: 0 },
+  currentSip: { type: Number, default: 0 }, // In-hand value / existing lumpsum
   investmentType: { type: String, default: "SIP/MF" },
   futureCost: { type: Number },
-  required: { type: Number },
-  futureValueOfSavings: { type: Number },
-  monthlySIP: { type: Number },
-  calculatedAt: { type: String },
-  createdAt: { type: Date, default: Date.now },
+  required: { type: Number }, // Amount still needed
+  futureValueOfSavings: { type: Number }, // Future value of in-hand amount
+  monthlySIP: { type: Number }, // Additional monthly SIP required
+  calculatedAt: { type: String }, // Timestamp of last calculation
+  createdAt: { type: Date, default: Date.now }, // When the goal was first created
 });
 
 const Goal = mongoose.model("Goal", goalSchema);
@@ -727,13 +727,14 @@ const updateDailyInterest = async () => {
 // Run interest calculation daily (optional - you can use a proper cron job)
 setInterval(updateDailyInterest, 24 * 60 * 60 * 1000); // Run every 24 hours
 
-// 📌 **Goal Routes**
+// 📌 **Goal Routes (for GoalCalculator module)**
 
-// Get all goals for a user
+// Get all goals for a specific user
 app.get("/goals/:username", async (req, res) => {
   const { username } = req.params;
 
   try {
+    // Find goals associated with the provided username
     const goals = await Goal.find({ userName: username }).sort({
       createdAt: -1,
     });
@@ -744,7 +745,7 @@ app.get("/goals/:username", async (req, res) => {
   }
 });
 
-// Create a new goal
+// Create a new goal for a user
 app.post("/goals/:username", async (req, res) => {
   const { username } = req.params;
   const goalData = req.body;
@@ -752,22 +753,19 @@ app.post("/goals/:username", async (req, res) => {
   console.log(`Received goal data for ${username}:`, goalData);
 
   try {
-    // Validate required fields - MODIFIED LOGIC HERE
+    // Validate required fields
     const requiredFields = ["name", "presentCost", "returnRate"];
     const missingFields = requiredFields.filter((field) => {
-      // Check for null or undefined values
       if (goalData[field] === null || goalData[field] === undefined) {
-        return true; // It's truly missing or null
+        return true;
       }
-      // For string fields, also check for empty strings
       if (
         typeof goalData[field] === "string" &&
         goalData[field].trim() === ""
       ) {
-        return true; // It's an empty string
+        return true;
       }
-      // For numbers, 0 is a valid value, so it's not considered missing here.
-      return false; // The field is present and valid
+      return false;
     });
 
     if (missingFields.length > 0) {
@@ -776,7 +774,7 @@ app.post("/goals/:username", async (req, res) => {
       });
     }
 
-    // Ensure numeric fields are valid (existing logic, kept for completeness)
+    // Ensure numeric fields are valid
     const numericFields = [
       "presentCost",
       "returnRate",
@@ -803,9 +801,9 @@ app.post("/goals/:username", async (req, res) => {
       }
     }
 
-    // Explicitly create the new goal object (existing logic, kept for completeness)
+    // Create the new goal object, associating it with the username
     const newGoal = new Goal({
-      userName: username,
+      userName: username, // Assign the username from the URL parameter
       name: goalData.name,
       customName: goalData.customName || undefined,
       presentCost: parseFloat(goalData.presentCost),
@@ -856,20 +854,22 @@ app.post("/goals/:username", async (req, res) => {
   }
 });
 
-// Update a goal
+// Update a goal for a specific user
 app.put("/goals/:username/:id", async (req, res) => {
   const { username, id } = req.params;
   const updateData = req.body;
 
   try {
     const updatedGoal = await Goal.findOneAndUpdate(
-      { _id: id, userName: username },
+      { _id: id, userName: username }, // Find by ID and username to ensure ownership
       { ...updateData, calculatedAt: new Date().toLocaleString() },
-      { new: true }
+      { new: true } // Return the updated document
     );
 
     if (!updatedGoal) {
-      return res.status(404).json({ error: "Goal not found" });
+      return res
+        .status(404)
+        .json({ error: "Goal not found or not authorized for this user." });
     }
 
     res.status(200).json(updatedGoal);
@@ -879,18 +879,20 @@ app.put("/goals/:username/:id", async (req, res) => {
   }
 });
 
-// Delete a goal
+// Delete a goal for a specific user
 app.delete("/goals/:username/:id", async (req, res) => {
   const { username, id } = req.params;
 
   try {
     const deletedGoal = await Goal.findOneAndDelete({
       _id: id,
-      userName: username,
+      userName: username, // Ensure only the owner can delete
     });
 
     if (!deletedGoal) {
-      return res.status(404).json({ error: "Goal not found" });
+      return res
+        .status(404)
+        .json({ error: "Goal not found or not authorized for this user." });
     }
 
     res.status(200).json({ message: "Goal deleted successfully" });
@@ -1004,7 +1006,8 @@ app.post("/calculate-interest", verifyToken, async (req, res) => {
   }
 });
 
-// 📌 Get All Goals (public)
+// 📌 Get All Goals (public) - This route is redundant if goals are user-specific, consider removing if not needed.
+// Keeping it for now as it was in your original server.js
 app.get("/goals", async (req, res) => {
   try {
     const allGoals = await Goal.find({});

@@ -5,6 +5,8 @@ const cors = require("cors");
 const bodyParser = require("body-parser");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
+// ObjectId is not explicitly used in the provided selection, so removed for brevity.
+// const ObjectId = mongoose.Types.ObjectId;
 
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET || "mysecretkey";
@@ -23,12 +25,39 @@ mongoose
   .then(() => console.log("✅ Connected to MongoDB Atlas"))
   .catch((err) => console.error("❌ MongoDB Connection Error:", err));
 
+// 📌 Define Goal Schema (Re-introduced for GoalCalculator module)
+const goalSchema = new mongoose.Schema({
+  userName: { type: String, required: true }, // Link to the user who owns this goal
+  name: { type: String, required: true }, // e.g., "B Education", "Dream Home", "Custom Goal"
+  customName: { type: String }, // For custom goals
+  presentCost: { type: Number, required: true },
+  childCurrentAge: { type: Number },
+  goalAge: { type: Number },
+  years: { type: Number }, // Years to reach the goal
+  currentAge: { type: Number },
+  inflation: { type: Number, default: 7.5 },
+  returnRate: { type: Number, required: true },
+  currentSip: { type: Number, default: 0 }, // In-hand value / existing lumpsum
+  investmentType: { type: String, default: "SIP/MF" },
+  futureCost: { type: Number },
+  required: { type: Number }, // Amount still needed
+  futureValueOfSavings: { type: Number }, // Future value of in-hand amount
+  monthlySIP: { type: Number }, // Additional monthly SIP required
+  calculatedAt: { type: String }, // Timestamp of last calculation
+  createdAt: { type: Date, default: Date.now }, // When the goal was first created
+});
+
+const Goal = mongoose.model("Goal", goalSchema);
+
 // 🔹 **Create User Model Dynamically**
 const createUserModel = (userName) => {
   const collectionName = `${userName}_details`;
 
+  console.log(`🔍 Creating model for collection: ${collectionName}`);
+
   // ✅ Check if model already exists
   if (mongoose.models[collectionName]) {
+    console.log(`✅ Using existing model for: ${collectionName}`);
     return mongoose.models[collectionName];
   }
 
@@ -63,6 +92,7 @@ const createUserModel = (userName) => {
     { timestamps: true }
   );
 
+  console.log(`✅ Creating new model for: ${collectionName}`);
   return mongoose.model(collectionName, UserSchema, collectionName);
 };
 
@@ -71,7 +101,9 @@ app.get("/check-username/:userName", async (req, res) => {
   const { userName } = req.params;
 
   try {
-    const collections = await mongoose.connection.db.listCollections().toArray();
+    const collections = await mongoose.connection.db
+      .listCollections()
+      .toArray();
     const collectionExists = collections.some(
       (col) => col.name === `${userName}_details`
     );
@@ -96,10 +128,17 @@ app.get("/check-email/:email", async (req, res) => {
   const { email } = req.params;
 
   try {
-    const collections = await mongoose.connection.db.listCollections().toArray();
+    const collections = await mongoose.connection.db
+      .listCollections()
+      .toArray();
 
     for (const col of collections) {
-      const UserModel = mongoose.model(col.name, {}, col.name);
+      // Dynamically create a model for each collection to query it
+      const UserModel = mongoose.model(
+        col.name,
+        new mongoose.Schema({}, { strict: false }),
+        col.name
+      );
       const existingUser = await UserModel.findOne({ email, type: "User" });
 
       if (existingUser) {
@@ -136,7 +175,9 @@ app.post("/api/register", async (req, res) => {
     }
 
     // Check if the username already exists in the database
-    const collections = await mongoose.connection.db.listCollections().toArray();
+    const collections = await mongoose.connection.db
+      .listCollections()
+      .toArray();
     const existingCollection = collections.some(
       (col) => col.name === `${userName}_details`
     );
@@ -209,7 +250,14 @@ app.post("/api/login", async (req, res) => {
     }
 
     const token = jwt.sign({ id: user._id }, JWT_SECRET, { expiresIn: "1h" });
-    res.json({ token, user: { firstName: user.firstName, email: user.email } });
+    res.json({
+      token,
+      user: {
+        firstName: user.firstName,
+        email: user.email,
+        userName: user.userName,
+      },
+    }); // Added userName to user object
   } catch (err) {
     console.error("Login Error:", err);
     res.status(500).json({ error: "Internal Server Error" });
@@ -310,6 +358,181 @@ app.get("/all-data/:userName", async (req, res) => {
     res.json(user);
   } catch (err) {
     console.error("Error fetching all data:", err);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+// 📌 **Goal Routes (for GoalCalculator module)**
+
+// Get all goals for a specific user
+app.get("/goals/:username", async (req, res) => {
+  const { username } = req.params;
+
+  try {
+    // Find goals associated with the provided username
+    const goals = await Goal.find({ userName: username }).sort({
+      createdAt: -1,
+    });
+    res.status(200).json(goals);
+  } catch (error) {
+    console.error("Error fetching goals:", error);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+// Create a new goal for a user
+app.post("/goals/:username", async (req, res) => {
+  const { username } = req.params;
+  const goalData = req.body;
+
+  console.log(`Received goal data for ${username}:`, goalData);
+
+  try {
+    // Validate required fields
+    const requiredFields = ["name", "presentCost", "returnRate"];
+    const missingFields = requiredFields.filter((field) => {
+      if (goalData[field] === null || goalData[field] === undefined) {
+        return true;
+      }
+      if (
+        typeof goalData[field] === "string" &&
+        goalData[field].trim() === ""
+      ) {
+        return true;
+      }
+      return false;
+    });
+
+    if (missingFields.length > 0) {
+      return res.status(400).json({
+        error: `Missing required fields: ${missingFields.join(", ")}`,
+      });
+    }
+
+    // Ensure numeric fields are valid
+    const numericFields = [
+      "presentCost",
+      "returnRate",
+      "currentSip",
+      "inflation",
+      "childCurrentAge",
+      "goalAge",
+      "years",
+      "currentAge",
+      "futureCost",
+      "required",
+      "futureValueOfSavings",
+      "monthlySIP",
+    ];
+    for (const field of numericFields) {
+      if (
+        goalData[field] !== undefined &&
+        goalData[field] !== null &&
+        isNaN(parseFloat(goalData[field]))
+      ) {
+        return res
+          .status(400)
+          .json({ error: `${field} must be a valid number` });
+      }
+    }
+
+    // Create the new goal object, associating it with the username
+    const newGoal = new Goal({
+      userName: username, // Assign the username from the URL parameter
+      name: goalData.name,
+      customName: goalData.customName || undefined,
+      presentCost: parseFloat(goalData.presentCost),
+      childCurrentAge: goalData.childCurrentAge
+        ? parseFloat(goalData.childCurrentAge)
+        : undefined,
+      goalAge: goalData.goalAge ? parseFloat(goalData.goalAge) : undefined,
+      years: goalData.years ? parseFloat(goalData.years) : undefined,
+      currentAge: goalData.currentAge
+        ? parseFloat(goalData.currentAge)
+        : undefined,
+      inflation: parseFloat(goalData.inflation || 7.5),
+      returnRate: parseFloat(goalData.returnRate),
+      currentSip: parseFloat(goalData.currentSip || 0),
+      investmentType: goalData.investmentType || "SIP/MF",
+      futureCost: goalData.futureCost
+        ? parseFloat(goalData.futureCost)
+        : undefined,
+      required: goalData.required ? parseFloat(goalData.required) : undefined,
+      futureValueOfSavings: goalData.futureValueOfSavings
+        ? parseFloat(goalData.futureValueOfSavings)
+        : undefined,
+      monthlySIP: goalData.monthlySIP
+        ? parseFloat(goalData.monthlySIP)
+        : undefined,
+      calculatedAt: new Date().toLocaleString(),
+    });
+
+    const savedGoal = await newGoal.save();
+    res.status(201).json(savedGoal);
+  } catch (error) {
+    console.error(`Error creating goal for ${username}:`, error.stack);
+    if (error.name === "ValidationError") {
+      console.error("Mongoose Validation errors:", error.errors);
+      const errors = Object.keys(error.errors).map(
+        (key) => error.errors[key].message
+      );
+      return res
+        .status(400)
+        .json({ error: `Validation failed: ${errors.join(", ")}` });
+    } else if (error.name === "MongoError") {
+      console.error("MongoDB error:", error.message);
+      return res
+        .status(500)
+        .json({ error: "Database operation failed. Please try again." });
+    }
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+// Update a goal for a specific user
+app.put("/goals/:username/:id", async (req, res) => {
+  const { username, id } = req.params;
+  const updateData = req.body;
+
+  try {
+    const updatedGoal = await Goal.findOneAndUpdate(
+      { _id: id, userName: username }, // Find by ID and username to ensure ownership
+      { ...updateData, calculatedAt: new Date().toLocaleString() },
+      { new: true } // Return the updated document
+    );
+
+    if (!updatedGoal) {
+      return res
+        .status(404)
+        .json({ error: "Goal not found or not authorized for this user." });
+    }
+
+    res.status(200).json(updatedGoal);
+  } catch (error) {
+    console.error("Error updating goal:", error);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+// Delete a goal for a specific user
+app.delete("/goals/:username/:id", async (req, res) => {
+  const { username, id } = req.params;
+
+  try {
+    const deletedGoal = await Goal.findOneAndDelete({
+      _id: id,
+      userName: username, // Ensure only the owner can delete
+    });
+
+    if (!deletedGoal) {
+      return res
+        .status(404)
+        .json({ error: "Goal not found or not authorized for this user." });
+    }
+
+    res.status(200).json({ message: "Goal deleted successfully" });
+  } catch (error) {
+    console.error("Error deleting goal:", error);
     res.status(500).json({ error: "Internal Server Error" });
   }
 });
