@@ -750,37 +750,93 @@ setInterval(updateDailyInterest, 24 * 60 * 60 * 1000); // Run every 24 hours
 // 📌 **Goal Routes**
 
 // Get all goals for a user
-app.get("/goals/:username", async (req, res) => {
+// In server.js
+
+// ... existing imports and code ...
+
+app.post("/goals/:username", async (req, res) => {
   const { username } = req.params;
-  
+  const goalData = req.body;
+
+  console.log(`Received goal data for ${username}:`, goalData);
+
   try {
-    const goals = await Goal.find({ userName: username }).sort({ createdAt: -1 });
-    res.status(200).json(goals);
+    // Validate required fields
+    const requiredFields = ["name", "presentCost", "returnRate"];
+    const missingFields = requiredFields.filter((field) => !goalData[field]);
+    if (missingFields.length > 0) {
+      return res
+        .status(400)
+        .json({ error: `Missing required fields: ${missingFields.join(", ")}` });
+    }
+
+    // Ensure numeric fields are valid
+    const numericFields = [
+      "presentCost",
+      "returnRate",
+      "currentSip",
+      "inflation",
+      "childCurrentAge",
+      "goalAge",
+      "years",
+      "currentAge",
+      "futureCost", // Add calculated fields to numeric validation
+      "required",
+      "futureValueOfSavings",
+      "monthlySIP",
+    ];
+    for (const field of numericFields) {
+      // Only validate if the field exists in goalData and is not a valid number
+      if (goalData[field] !== undefined && goalData[field] !== null && isNaN(parseFloat(goalData[field]))) {
+        return res.status(400).json({ error: `${field} must be a valid number` });
+      }
+    }
+
+    // Explicitly create the new goal object, parsing values and handling defaults/optionality
+    const newGoal = new Goal({
+      userName: username,
+      name: goalData.name,
+      customName: goalData.customName || undefined, // Set to undefined if empty string or null
+      presentCost: parseFloat(goalData.presentCost),
+      // Handle optional fields: if they exist, parse them, otherwise leave undefined/null
+      childCurrentAge: goalData.childCurrentAge ? parseFloat(goalData.childCurrentAge) : undefined,
+      goalAge: goalData.goalAge ? parseFloat(goalData.goalAge) : undefined,
+      years: goalData.years ? parseFloat(goalData.years) : undefined,
+      currentAge: goalData.currentAge ? parseFloat(goalData.currentAge) : undefined,
+      inflation: parseFloat(goalData.inflation || 7.5), // Use default if frontend doesn't send
+      returnRate: parseFloat(goalData.returnRate),
+      currentSip: parseFloat(goalData.currentSip || 0), // Use default if frontend sends empty/null
+      investmentType: goalData.investmentType || "SIP/MF",
+      // Include calculated fields from frontend
+      futureCost: goalData.futureCost ? parseFloat(goalData.futureCost) : undefined,
+      required: goalData.required ? parseFloat(goalData.required) : undefined,
+      futureValueOfSavings: goalData.futureValueOfSavings ? parseFloat(goalData.futureValueOfSavings) : undefined,
+      monthlySIP: goalData.monthlySIP ? parseFloat(goalData.monthlySIP) : undefined,
+      calculatedAt: new Date().toLocaleString(), // Server-side timestamp
+      // createdAt is handled by Mongoose default
+    });
+
+    const savedGoal = await newGoal.save();
+    res.status(201).json(savedGoal);
   } catch (error) {
-    console.error("Error fetching goals:", error);
+    console.error(`Error creating goal for ${username}:`, error.stack); // This is key for debugging on server logs
+    if (error.name === "ValidationError") {
+      // Mongoose validation error (e.g., required field missing, type mismatch)
+      console.error("Mongoose Validation errors:", error.errors);
+      // Construct a more user-friendly error message from Mongoose validation errors
+      const errors = Object.keys(error.errors).map(key => error.errors[key].message);
+      return res.status(400).json({ error: `Validation failed: ${errors.join(", ")}` });
+    } else if (error.name === "MongoError") {
+      // MongoDB specific error (e.g., connection issue, duplicate key)
+      console.error("MongoDB error:", error.message);
+      return res.status(500).json({ error: "Database operation failed. Please try again." });
+    }
+    // Catch-all for any other unexpected errors
     res.status(500).json({ error: "Internal Server Error" });
   }
 });
 
-// Create a new goal
-app.post("/goals/:username", async (req, res) => {
-  const { username } = req.params;
-  const goalData = req.body;
-  
-  try {
-    const newGoal = new Goal({
-      ...goalData,
-      userName: username,
-      calculatedAt: new Date().toLocaleString()
-    });
-    
-    const savedGoal = await newGoal.save();
-    res.status(201).json(savedGoal);
-  } catch (error) {
-    console.error("Error creating goal:", error);
-    res.status(500).json({ error: "Internal Server Error" });
-  }
-});
+// ... existing code ...
 
 // Update a goal
 app.put("/goals/:username/:id", async (req, res) => {
