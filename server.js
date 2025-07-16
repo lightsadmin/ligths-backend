@@ -37,10 +37,10 @@ const transactionSchema = new mongoose.Schema({
 // 📌 Define Investment Schema
 const investmentSchema = new mongoose.Schema({
   user: { type: mongoose.Schema.Types.ObjectId, required: true },
-  name: { type: String, required: true }, // Initial investment amount
-  amount: { type: Number, required: true }, // Current value with interest
-  currentAmount: { type: Number, required: true }, // Annual interest rate (%)
-  interestRate: { type: Number, default: 0 }, // Changed: Removed 'required: true', added 'default: 0'
+  name: { type: String, required: true },
+  amount: { type: Number, required: true }, // Initial investment amount
+  currentAmount: { type: Number, required: true }, // Current value with interest
+  interestRate: { type: Number, required: true }, // Annual interest rate (%)
   investmentType: { type: String, required: true }, // e.g., "Fixed Deposit", "Mutual Fund", etc.
   startDate: { type: Date, default: Date.now },
   maturityDate: { type: Date },
@@ -972,11 +972,17 @@ app.post("/investment", verifyToken, async (req, res) => {
     // Set currentAmount equal to initial amount for new investments
     investmentData.currentAmount = investmentData.amount;
 
+    // IMPORTANT FIX: Provide a default name if it's a "Savings" type and no name is provided
+    if (investmentData.investmentType === "Savings" && !investmentData.name) {
+      investmentData.name = "General Savings"; // Or "Savings Account" + a timestamp, etc.
+    }
+
     const newInvestment = new Investment(investmentData);
     await newInvestment.save();
     res.json(newInvestment);
   } catch (err) {
-    res.status(500).json(err);
+    console.error("Error creating investment:", err);
+    res.status(500).json({ error: err.message || "Failed to add investment" });
   }
 });
 
