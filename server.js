@@ -7,7 +7,6 @@
 // const jwt = require("jsonwebtoken");
 // const ObjectId = mongoose.Types.ObjectId;
 
-
 // const PORT = process.env.PORT || 5000;
 // const JWT_SECRET = process.env.JWT_SECRET || "mysecretkey";
 // const MONGO_URI =  process.env.MONGO_URI || "mongodb+srv://subikshapc:<db_password>@ligths.tncb6.mongodb.net/?retryWrites=true&w=majority&appName=Ligths";
@@ -22,7 +21,7 @@
 //   .connect(process.env.MONGO_URI)
 //   .then(() => console.log("✅ Connected to MongoDB Atlas"))
 //   .catch((err) => console.error("❌ MongoDB Connection Error:", err));
-  
+
 // // 📌 Define Transaction Schema
 // const transactionSchema = new mongoose.Schema({
 //   name: { type: String, required: true },
@@ -77,7 +76,7 @@
 // // 🔹 **Create User Model Dynamically**
 // const createUserModel = (userName) => {
 //   const collectionName = `${userName}`;
-  
+
 //   console.log(`🔍 Creating model for collection: ${collectionName}`); // Add this log
 
 //   // ✅ Check if model already exists
@@ -170,7 +169,6 @@
 //   }
 // });
 
-
 // app.post("/api/register", async (req, res) => {
 //   console.log("✅ Register route hit!");
 //   const {
@@ -229,8 +227,6 @@
 //   }
 // });
 
-
-
 // // 📌 Get User Profile Route
 // app.get("/profile/:userName", async (req, res) => {
 //   try {
@@ -269,7 +265,7 @@
 //   try {
 //     const { userName } = req.params;
 //     const updateData = req.body;
-    
+
 //     // Validate required fields
 //     if (!updateData.firstName || !updateData.lastName) {
 //       return res.status(400).json({ error: "First name and last name are required." });
@@ -277,17 +273,17 @@
 
 //     // Create user model
 //     const UserModel = createUserModel(userName);
-    
+
 //     // Find user
 //     const user = await UserModel.findOne({ userName });
-    
+
 //     if (!user) {
 //       return res.status(404).json({ error: "User not found." });
 //     }
-    
+
 //     // Update allowed fields only (prevent updating sensitive fields like password)
 //     const allowedFields = ['firstName', 'lastName', 'phoneNumber', 'country', 'age', 'retirementAge'];
-    
+
 //     allowedFields.forEach(field => {
 //       if (updateData[field] !== undefined) {
 //         // Convert age and retirementAge to numbers if they are provided
@@ -298,10 +294,10 @@
 //         }
 //       }
 //     });
-    
+
 //     // Save the updated user
 //     await user.save();
-    
+
 //     // Return the updated profile
 //     const updatedProfile = {
 //       firstName: user.firstName,
@@ -313,14 +309,13 @@
 //       age: user.age,
 //       retirementAge: user.retirementAge
 //     };
-    
+
 //     res.status(200).json(updatedProfile);
 //   } catch (error) {
 //     console.error("Error updating profile:", error);
 //     res.status(500).json({ error: "Internal Server Error" });
 //   }
 // });
-
 
 // // 📌 **Get All Transactions for a User**
 // app.get("/transactions/:username", async (req, res) => {
@@ -407,7 +402,6 @@
 //   }
 // });
 
-
 // app.post("/transactions/:username", async (req, res) => {
 //   const { username } = req.params;
 //   const { name, amount, type, subType, method, date } = req.body;
@@ -465,7 +459,6 @@
 //     res.status(500).json({ error: "Internal Server Error" });
 //   }
 // });
-
 
 // // 📌 **Check Username Availability**
 // app.post("/api/check-username", async (req, res) => {
@@ -579,8 +572,6 @@
 //   }
 // });
 
-
-
 // app.get("/api/inflation-data", (req, res) => {
 //   try {
 //     const inflationData = require('./inflation_data.json');
@@ -590,7 +581,6 @@
 //     res.status(500).json({ error: "Failed to retrieve inflation data" });
 //   }
 // });
-
 
 // app.get("/transactions/:username/monthly-essential", async (req, res) => {
 //   const { username } = req.params;
@@ -629,7 +619,7 @@
 //       try {
 //         const date = new Date(expense.date);
 //         // Filter out invalid dates, but conditionally include today's expenses
-//         return !isNaN(date) && 
+//         return !isNaN(date) &&
 //                date.getFullYear() >= 2000 &&
 //                (includeToday === 'true' || expense.date !== todayString);
 //       } catch (e) {
@@ -651,26 +641,26 @@
 
 //     // Calculate total amount
 //     const totalAmount = validExpenses.reduce((sum, expense) => sum + expense.amount, 0);
-    
+
 //     // Count unique days of expenses
 //     const uniqueDays = new Set(validExpenses.map(expense => expense.date.substring(0, 10))).size;
-    
+
 //     // Sort expenses by date
-//     const sortedExpenses = [...validExpenses].sort((a, b) => 
+//     const sortedExpenses = [...validExpenses].sort((a, b) =>
 //       new Date(a.date) - new Date(b.date)
 //     );
-    
+
 //     const earliestDate = new Date(sortedExpenses[0].date);
 //     const latestDate = new Date(sortedExpenses[sortedExpenses.length - 1].date);
-    
+
 //     // Calculate months span for informational purposes
-//     const monthsSpan = 
-//       (latestDate.getFullYear() - earliestDate.getFullYear()) * 12 + 
+//     const monthsSpan =
+//       (latestDate.getFullYear() - earliestDate.getFullYear()) * 12 +
 //       (latestDate.getMonth() - earliestDate.getMonth()) + 1;
-    
+
 //     // Calculate average per day of expenses
 //     const avgPerDay = totalAmount / uniqueDays;
-    
+
 //     // Calculate monthly projection (daily average * 30)
 //     const monthlyProjection = avgPerDay * 30;
 
@@ -693,15 +683,14 @@
 //   }
 // });
 
-
 // // 📌 JWT Token Verification Middleware
 // const verifyToken = (req, res, next) => {
 //   const token = req.header("Authorization")?.replace("Bearer ", "");
-  
+
 //   if (!token) {
 //     return res.status(401).json({ error: "Access denied. No token provided." });
 //   }
-  
+
 //   try {
 //     const decoded = jwt.verify(token, JWT_SECRET);
 //     req.user = decoded;
@@ -715,21 +704,21 @@
 // const updateDailyInterest = async () => {
 //   try {
 //     const investments = await Investment.find({});
-    
+
 //     for (const investment of investments) {
 //       const now = new Date();
 //       const lastUpdate = new Date(investment.lastInterestUpdate);
-      
+
 //       // Calculate days since last update
 //       const daysDiff = Math.floor((now - lastUpdate) / (1000 * 60 * 60 * 24));
-      
+
 //       if (daysDiff > 0) {
 //         // Calculate daily interest rate
 //         const dailyRate = investment.interestRate / 100 / 365;
-        
+
 //         // Apply compound interest for the number of days
 //         const newAmount = investment.currentAmount * Math.pow(1 + dailyRate, daysDiff);
-        
+
 //         // Update the investment
 //         await Investment.findByIdAndUpdate(investment._id, {
 //           currentAmount: newAmount,
@@ -737,7 +726,7 @@
 //         });
 //       }
 //     }
-    
+
 //     console.log("Daily interest updated for all investments");
 //   } catch (err) {
 //     console.error("Error updating daily interest:", err);
@@ -842,18 +831,18 @@
 // app.put("/goals/:username/:id", async (req, res) => {
 //   const { username, id } = req.params;
 //   const updateData = req.body;
-  
+
 //   try {
 //     const updatedGoal = await Goal.findOneAndUpdate(
 //       { _id: id, userName: username },
 //       { ...updateData, calculatedAt: new Date().toLocaleString() },
 //       { new: true }
 //     );
-    
+
 //     if (!updatedGoal) {
 //       return res.status(404).json({ error: "Goal not found" });
 //     }
-    
+
 //     res.status(200).json(updatedGoal);
 //   } catch (error) {
 //     console.error("Error updating goal:", error);
@@ -864,14 +853,14 @@
 // // Delete a goal
 // app.delete("/goals/:username/:id", async (req, res) => {
 //   const { username, id } = req.params;
-  
+
 //   try {
 //     const deletedGoal = await Goal.findOneAndDelete({ _id: id, userName: username });
-    
+
 //     if (!deletedGoal) {
 //       return res.status(404).json({ error: "Goal not found" });
 //     }
-    
+
 //     res.status(200).json({ message: "Goal deleted successfully" });
 //   } catch (error) {
 //     console.error("Error deleting goal:", error);
@@ -882,7 +871,7 @@
 // // Get investments by goal (placeholder for future integration)
 // app.get("/investments/:username/by-goal/:goalId", async (req, res) => {
 //   const { username, goalId } = req.params;
-  
+
 //   try {
 //     // This is a placeholder for when you integrate with actual investment tracking
 //     // For now, return empty data
@@ -905,10 +894,10 @@
 //         const investmentData = req.body;
 //         // Add user ID from the token
 //         investmentData.user = req.user.id;
-        
+
 //         // Set currentAmount equal to initial amount for new investments
 //         investmentData.currentAmount = investmentData.amount;
-        
+
 //         const newInvestment = new Investment(investmentData);
 //         await newInvestment.save();
 //         res.json(newInvestment);
@@ -930,18 +919,18 @@
 // // Update investment
 // app.put("/investment/:id", verifyToken, async (req, res) => {
 //     try {
-//         const investment = await Investment.findOne({ 
+//         const investment = await Investment.findOne({
 //             _id: req.params.id,
 //             user: req.user.id
 //         });
-        
+
 //         if (!investment) {
 //             return res.status(404).json({ error: "Investment not found or not authorized" });
 //         }
-        
+
 //         const updatedInvestment = await Investment.findByIdAndUpdate(
-//             req.params.id, 
-//             req.body, 
+//             req.params.id,
+//             req.body,
 //             { new: true }
 //         );
 //         res.json(updatedInvestment);
@@ -953,15 +942,15 @@
 // // Delete investment
 // app.delete("/investment/:id", verifyToken, async (req, res) => {
 //     try {
-//         const investment = await Investment.findOne({ 
+//         const investment = await Investment.findOne({
 //             _id: req.params.id,
 //             user: req.user.id
 //         });
-        
+
 //         if (!investment) {
 //             return res.status(404).json({ error: "Investment not found or not authorized" });
 //         }
-        
+
 //         await Investment.findByIdAndDelete(req.params.id);
 //         res.json({ message: "Investment deleted" });
 //     } catch (err) {
@@ -982,10 +971,6 @@
 // // 🔹 **Start Server**
 // app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
 
-
-
-
-
 require("dotenv").config();
 const express = require("express");
 const mongoose = require("mongoose");
@@ -995,10 +980,11 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const ObjectId = mongoose.Types.ObjectId;
 
-
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET || "mysecretkey";
-const MONGO_URI =  process.env.MONGO_URI || "mongodb+srv://subikshapc:<db_password>@ligths.tncb6.mongodb.net/?retryWrites=true&w=majority&appName=Ligths";
+const MONGO_URI =
+  process.env.MONGO_URI ||
+  "mongodb+srv://subikshapc:<db_password>@ligths.tncb6.mongodb.net/?retryWrites=true&w=majority&appName=Ligths";
 
 const app = express();
 app.use(cors());
@@ -1010,7 +996,7 @@ mongoose
   .connect(process.env.MONGO_URI)
   .then(() => console.log("✅ Connected to MongoDB Atlas"))
   .catch((err) => console.error("❌ MongoDB Connection Error:", err));
-  
+
 // 📌 Define Transaction Schema
 const transactionSchema = new mongoose.Schema({
   name: { type: String, required: true },
@@ -1033,14 +1019,14 @@ const investmentSchema = new mongoose.Schema({
   maturityDate: { type: Date },
   lastInterestUpdate: { type: Date, default: Date.now },
   compoundingFrequency: { type: String, default: "daily" }, // daily, monthly, yearly
-  description: { type: String }
+  description: { type: String },
 });
 
 const Investment = mongoose.model("Investment", investmentSchema);
 
 // 📌 Define Goal Schema
 const goalSchema = new mongoose.Schema({
-  userId: { type: mongoose.Schema.Types.ObjectId, required: true, ref: 'User' }, // Reference to the User model
+  userId: { type: mongoose.Schema.Types.ObjectId, required: true, ref: "User" }, // Reference to the User model
   userName: { type: String, required: true }, // Keeping userName for easier querying, but userId is primary for relations
   name: { type: String, required: true },
   customName: { type: String },
@@ -1058,7 +1044,7 @@ const goalSchema = new mongoose.Schema({
   futureValueOfSavings: { type: Number },
   monthlySIP: { type: Number },
   calculatedAt: { type: String },
-  createdAt: { type: Date, default: Date.now }
+  createdAt: { type: Date, default: Date.now },
 });
 
 const Goal = mongoose.model("Goal", goalSchema);
@@ -1066,7 +1052,7 @@ const Goal = mongoose.model("Goal", goalSchema);
 // 🔹 **Create User Model Dynamically**
 const createUserModel = (userName) => {
   const collectionName = `${userName}`;
-  
+
   console.log(`🔍 Creating model for collection: ${collectionName}`); // Add this log
 
   // ✅ Check if model already exists
@@ -1089,8 +1075,17 @@ const createUserModel = (userName) => {
       {
         name: { type: String, required: true },
         amount: { type: Number, required: true },
-        type: { type: String, required: true, enum: ["Income", "Investment", "Expense"] },
-        subType: { type: String, required: function () { return this.type === "Expense"; } },
+        type: {
+          type: String,
+          required: true,
+          enum: ["Income", "Investment", "Expense"],
+        },
+        subType: {
+          type: String,
+          required: function () {
+            return this.type === "Expense";
+          },
+        },
         method: { type: String, required: true },
         date: { type: String, required: true },
       },
@@ -1101,17 +1096,20 @@ const createUserModel = (userName) => {
   return mongoose.model(collectionName, UserSchema, collectionName);
 };
 
-
 // 📌 JWT Token Verification Middleware
 const verifyToken = (req, res, next) => {
   const authHeader = req.headers.authorization;
   if (!authHeader) {
-    return res.status(401).json({ error: "No token provided, authorization denied" });
+    return res
+      .status(401)
+      .json({ error: "No token provided, authorization denied" });
   }
 
   const token = authHeader.split(" ")[1]; // Bearer TOKEN
   if (!token) {
-    return res.status(401).json({ error: "Token format invalid (Expected: Bearer TOKEN)" });
+    return res
+      .status(401)
+      .json({ error: "Token format invalid (Expected: Bearer TOKEN)" });
   }
 
   try {
@@ -1124,7 +1122,6 @@ const verifyToken = (req, res, next) => {
     res.status(403).json({ error: "Token is not valid" });
   }
 };
-
 
 // 📌 User Registration Route
 app.post("/api/register", async (req, res) => {
@@ -1149,7 +1146,9 @@ app.post("/api/register", async (req, res) => {
     }
 
     // Check if the username already exists in the database
-    const collections = await mongoose.connection.db.listCollections().toArray();
+    const collections = await mongoose.connection.db
+      .listCollections()
+      .toArray();
     const existingCollection = collections.some(
       (col) => col.name === `${userName}`
     );
@@ -1185,7 +1184,6 @@ app.post("/api/register", async (req, res) => {
   }
 });
 
-
 // 📌 Get User Profile Route
 app.get("/profile/:userName", verifyToken, async (req, res) => {
   try {
@@ -1193,7 +1191,9 @@ app.get("/profile/:userName", verifyToken, async (req, res) => {
 
     // Ensure the token's userName matches the requested userName for security
     if (req.user.userName !== userName) {
-      return res.status(403).json({ error: "Unauthorized access to user profile." });
+      return res
+        .status(403)
+        .json({ error: "Unauthorized access to user profile." });
     }
 
     // Use the existing createUserModel function
@@ -1230,44 +1230,58 @@ app.put("/profile/:userName", verifyToken, async (req, res) => {
   try {
     const { userName } = req.params;
     const updateData = req.body;
-    
+
     // Ensure the token's userName matches the requested userName for security
     if (req.user.userName !== userName) {
-      return res.status(403).json({ error: "Unauthorized access to user profile." });
+      return res
+        .status(403)
+        .json({ error: "Unauthorized access to user profile." });
     }
 
     // Validate required fields
     if (!updateData.firstName || !updateData.lastName) {
-      return res.status(400).json({ error: "First name and last name are required." });
+      return res
+        .status(400)
+        .json({ error: "First name and last name are required." });
     }
 
     // Create user model
     const UserModel = createUserModel(userName);
-    
+
     // Find user
     const user = await UserModel.findOne({ userName });
-    
+
     if (!user) {
       return res.status(404).json({ error: "User not found." });
     }
-    
+
     // Update allowed fields only (prevent updating sensitive fields like password)
-    const allowedFields = ['firstName', 'lastName', 'phoneNumber', 'country', 'age', 'retirementAge'];
-    
-    allowedFields.forEach(field => {
+    const allowedFields = [
+      "firstName",
+      "lastName",
+      "phoneNumber",
+      "country",
+      "age",
+      "retirementAge",
+    ];
+
+    allowedFields.forEach((field) => {
       if (updateData[field] !== undefined) {
         // Convert age and retirementAge to numbers if they are provided
-        if ((field === 'age' || field === 'retirementAge') && updateData[field]) {
+        if (
+          (field === "age" || field === "retirementAge") &&
+          updateData[field]
+        ) {
           user[field] = Number(updateData[field]);
         } else {
           user[field] = updateData[field];
         }
       }
     });
-    
+
     // Save the updated user
     await user.save();
-    
+
     // Return the updated profile
     const updatedProfile = {
       firstName: user.firstName,
@@ -1277,9 +1291,9 @@ app.put("/profile/:userName", verifyToken, async (req, res) => {
       phoneNumber: user.phoneNumber,
       country: user.country,
       age: user.age,
-      retirementAge: user.retirementAge
+      retirementAge: user.retirementAge,
     };
-    
+
     res.status(200).json(updatedProfile);
   } catch (error) {
     console.error("Error updating profile:", error);
@@ -1287,14 +1301,15 @@ app.put("/profile/:userName", verifyToken, async (req, res) => {
   }
 });
 
-
 // 📌 **Get All Transactions for a User**
 app.get("/transactions/:username", verifyToken, async (req, res) => {
   const { username } = req.params;
 
   // Ensure the token's userName matches the requested username for security
   if (req.user.userName !== username) {
-    return res.status(403).json({ error: "Unauthorized access to user transactions." });
+    return res
+      .status(403)
+      .json({ error: "Unauthorized access to user transactions." });
   }
 
   try {
@@ -1379,14 +1394,15 @@ app.post("/api/login", async (req, res) => {
   }
 });
 
-
 app.post("/transactions/:username", verifyToken, async (req, res) => {
   const { username } = req.params;
   const { name, amount, type, subType, method, date } = req.body;
 
   // Ensure the token's userName matches the requested username for security
   if (req.user.userName !== username) {
-    return res.status(403).json({ error: "Unauthorized access to user transactions." });
+    return res
+      .status(403)
+      .json({ error: "Unauthorized access to user transactions." });
   }
 
   try {
@@ -1443,25 +1459,6 @@ app.post("/transactions/:username", verifyToken, async (req, res) => {
   }
 });
 
-// 📌 Goal Routes
-// GET all goals for a user
-app.get("/goals/:userName", verifyToken, async (req, res) => {
-  try {
-    const { userName } = req.params;
-
-    // Ensure the token's userName matches the requested userName for security
-    if (req.user.userName !== userName) {
-      return res.status(403).json({ error: "Unauthorized access to goals." });
-    }
-
-    const goals = await Goal.find({ userName: userName });
-    res.status(200).json(goals);
-  } catch (error) {
-    console.error("Error fetching goals:", error);
-    res.status(500).json({ error: "Internal Server Error" });
-  }
-});
-
 // POST (Create) a new goal for a user
 app.post("/goals/:userName", verifyToken, async (req, res) => {
   try {
@@ -1470,12 +1467,14 @@ app.post("/goals/:userName", verifyToken, async (req, res) => {
 
     // Ensure the token's userName matches the requested userName for security
     if (req.user.userName !== userName) {
-      return res.status(403).json({ error: "Unauthorized: Cannot create goal for another user." });
+      return res
+        .status(403)
+        .json({ error: "Unauthorized: Cannot create goal for another user." });
     }
 
     // Ensure userId is present in the token and assign it to the goal
     if (!req.user.id) {
-        return res.status(400).json({ error: "User ID not found in token." });
+      return res.status(400).json({ error: "User ID not found in token." });
     }
 
     const newGoal = new Goal({
@@ -1489,7 +1488,9 @@ app.post("/goals/:userName", verifyToken, async (req, res) => {
     res.status(201).json(savedGoal);
   } catch (error) {
     console.error("Error creating goal:", error);
-    res.status(500).json({ error: "Internal Server Error", details: error.message });
+    res
+      .status(500)
+      .json({ error: "Internal Server Error", details: error.message });
   }
 });
 
@@ -1501,11 +1502,17 @@ app.put("/goals/:userName/:id", verifyToken, async (req, res) => {
 
     // Ensure the token's userName matches the requested userName for security
     if (req.user.userName !== userName) {
-      return res.status(403).json({ error: "Unauthorized: Cannot update another user's goal." });
+      return res
+        .status(403)
+        .json({ error: "Unauthorized: Cannot update another user's goal." });
     }
 
     // Find the goal and ensure it belongs to the authenticated user
-    const goal = await Goal.findOne({ _id: id, userName: userName, userId: req.user.id });
+    const goal = await Goal.findOne({
+      _id: id,
+      userName: userName,
+      userId: req.user.id,
+    });
 
     if (!goal) {
       return res.status(404).json({ error: "Goal not found or unauthorized." });
@@ -1519,7 +1526,9 @@ app.put("/goals/:userName/:id", verifyToken, async (req, res) => {
     res.status(200).json(updatedGoal);
   } catch (error) {
     console.error("Error updating goal:", error);
-    res.status(500).json({ error: "Internal Server Error", details: error.message });
+    res
+      .status(500)
+      .json({ error: "Internal Server Error", details: error.message });
   }
 });
 
@@ -1530,11 +1539,17 @@ app.delete("/goals/:userName/:id", verifyToken, async (req, res) => {
 
     // Ensure the token's userName matches the requested userName for security
     if (req.user.userName !== userName) {
-      return res.status(403).json({ error: "Unauthorized: Cannot delete another user's goal." });
+      return res
+        .status(403)
+        .json({ error: "Unauthorized: Cannot delete another user's goal." });
     }
 
     // Find and delete the goal, ensuring it belongs to the authenticated user
-    const result = await Goal.deleteOne({ _id: id, userName: userName, userId: req.user.id });
+    const result = await Goal.deleteOne({
+      _id: id,
+      userName: userName,
+      userId: req.user.id,
+    });
 
     if (result.deletedCount === 0) {
       return res.status(404).json({ error: "Goal not found or unauthorized." });
@@ -1543,7 +1558,9 @@ app.delete("/goals/:userName/:id", verifyToken, async (req, res) => {
     res.status(200).json({ message: "Goal deleted successfully." });
   } catch (error) {
     console.error("Error deleting goal:", error);
-    res.status(500).json({ error: "Internal Server Error", details: error.message });
+    res
+      .status(500)
+      .json({ error: "Internal Server Error", details: error.message });
   }
 });
 
@@ -1552,7 +1569,9 @@ app.delete("/transactions/:username/:id", verifyToken, async (req, res) => {
 
   // Ensure the token's userName matches the requested username for security
   if (req.user.userName !== username) {
-    return res.status(403).json({ error: "Unauthorized access to user transactions." });
+    return res
+      .status(403)
+      .json({ error: "Unauthorized access to user transactions." });
   }
 
   console.log(`🗑️ Deleting transaction with ID: ${id} for user: ${username}`);
@@ -1582,7 +1601,9 @@ app.delete("/transactions/:username/:id", verifyToken, async (req, res) => {
       (transaction) => !transaction.subType
     );
     if (invalidTransactions.length > 0) {
-      console.log(`⚠️ Found ${invalidTransactions.length} invalid transactions. Fixing them...`);
+      console.log(
+        `⚠️ Found ${invalidTransactions.length} invalid transactions. Fixing them...`
+      );
       user.transactions.forEach((transaction) => {
         if (!transaction.subType) {
           transaction.subType = "Other"; // Default value
@@ -1596,7 +1617,9 @@ app.delete("/transactions/:username/:id", verifyToken, async (req, res) => {
     // ✅ Save without validation
     await user.save({ validateBeforeSave: false });
     console.log(`✅ Transaction deleted successfully!`);
-    res.status(200).json({ success: true, message: "Transaction deleted successfully." });
+    res
+      .status(200)
+      .json({ success: true, message: "Transaction deleted successfully." });
   } catch (error) {
     console.error("❌ Error deleting transaction:", error);
     res.status(500).json({ error: "Error deleting transaction." });
@@ -1605,7 +1628,7 @@ app.delete("/transactions/:username/:id", verifyToken, async (req, res) => {
 
 app.get("/api/inflation-data", (req, res) => {
   try {
-    const inflationData = require('./inflation_data.json');
+    const inflationData = require("./inflation_data.json");
     res.json(inflationData);
   } catch (error) {
     console.error("Error loading inflation data:", error);
@@ -1613,82 +1636,117 @@ app.get("/api/inflation-data", (req, res) => {
   }
 });
 
-app.get("/transactions/:username/monthly-essential", verifyToken, async (req, res) => {
-  const { username } = req.params;
-  const { includeToday } = req.query; // Add query parameter to optionally include today's expenses
+app.get(
+  "/transactions/:username/monthly-essential",
+  verifyToken,
+  async (req, res) => {
+    const { username } = req.params;
+    const { includeToday } = req.query; // Add query parameter to optionally include today's expenses
 
-  // Ensure the token's userName matches the requested username for security
-  if (req.user.userName !== username) {
-    return res.status(403).json({ error: "Unauthorized access to monthly essential transactions." });
-  }
+    // Ensure the token's userName matches the requested username for security
+    if (req.user.userName !== username) {
+      return res
+        .status(403)
+        .json({
+          error: "Unauthorized access to monthly essential transactions.",
+        });
+    }
 
-  try {
-    const UserModel = createUserModel(username);
-    const user = await UserModel.findOne({ userName: username });
-    if (!user) {
-      return res.status(404).json({ error: "User not found" });
-    }
-    // Filter essential expenses
-    const essentialExpenses = user.transactions.filter(
-      transaction => transaction.type === "Expense" && transaction.subType === "Essential"
-    );
-    if (essentialExpenses.length === 0) {
-      return res.json({ monthlyAverage: "0.00", dailyAverage: "0.00", days: 0, months: 0, totalAmount: 0, expenses: [] });
-    }
-    // Get today's date in YYYY-MM-DD format
-    const today = new Date();
-    const todayString = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-    // Verify dates and filter out invalid ones (but include today if requested)
-    const validExpenses = essentialExpenses.filter(expense => {
-      try {
-        const date = new Date(expense.date);
-        // Filter out invalid dates, but conditionally include today's expenses
-        return !isNaN(date) && date.getFullYear() >= 2000 && (includeToday === 'true' || expense.date !== todayString);
-      } catch (e) {
-        return false;
+    try {
+      const UserModel = createUserModel(username);
+      const user = await UserModel.findOne({ userName: username });
+      if (!user) {
+        return res.status(404).json({ error: "User not found" });
       }
-    });
-    // If no valid expenses left after filtering
-    if (validExpenses.length === 0) {
-      return res.json({ monthlyAverage: "0.00", dailyAverage: "0.00", days: 0, months: 0, totalAmount: 0, expenses: [] });
+      // Filter essential expenses
+      const essentialExpenses = user.transactions.filter(
+        (transaction) =>
+          transaction.type === "Expense" && transaction.subType === "Essential"
+      );
+      if (essentialExpenses.length === 0) {
+        return res.json({
+          monthlyAverage: "0.00",
+          dailyAverage: "0.00",
+          days: 0,
+          months: 0,
+          totalAmount: 0,
+          expenses: [],
+        });
+      }
+      // Get today's date in YYYY-MM-DD format
+      const today = new Date();
+      const todayString = `${today.getFullYear()}-${String(
+        today.getMonth() + 1
+      ).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+      // Verify dates and filter out invalid ones (but include today if requested)
+      const validExpenses = essentialExpenses.filter((expense) => {
+        try {
+          const date = new Date(expense.date);
+          // Filter out invalid dates, but conditionally include today's expenses
+          return (
+            !isNaN(date) &&
+            date.getFullYear() >= 2000 &&
+            (includeToday === "true" || expense.date !== todayString)
+          );
+        } catch (e) {
+          return false;
+        }
+      });
+      // If no valid expenses left after filtering
+      if (validExpenses.length === 0) {
+        return res.json({
+          monthlyAverage: "0.00",
+          dailyAverage: "0.00",
+          days: 0,
+          months: 0,
+          totalAmount: 0,
+          expenses: [],
+        });
+      }
+      // Calculate total amount
+      const totalAmount = validExpenses.reduce(
+        (sum, expense) => sum + expense.amount,
+        0
+      );
+      // Determine the date range
+      const dates = validExpenses
+        .map((expense) => new Date(expense.date))
+        .sort((a, b) => a - b);
+      const firstDate = dates[0];
+      const lastDate = dates[dates.length - 1];
+      // Calculate days and months
+      const diffTime = Math.abs(lastDate.getTime() - firstDate.getTime());
+      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1; // +1 to include both start and end day
+      const diffMonths =
+        (lastDate.getFullYear() - firstDate.getFullYear()) * 12 +
+        (lastDate.getMonth() - firstDate.getMonth()) +
+        1; // +1 for the current month
+
+      const monthlyAverage = (totalAmount / diffMonths).toFixed(2);
+      const dailyAverage = (totalAmount / diffDays).toFixed(2);
+
+      res.json({
+        monthlyAverage,
+        dailyAverage,
+        days: diffDays,
+        months: diffMonths,
+        totalAmount,
+        expenses: validExpenses,
+      });
+    } catch (error) {
+      console.error("Error calculating monthly essential expenses:", error);
+      res.status(500).json({ error: "Internal Server Error" });
     }
-    // Calculate total amount
-    const totalAmount = validExpenses.reduce((sum, expense) => sum + expense.amount, 0);
-    // Determine the date range
-    const dates = validExpenses.map(expense => new Date(expense.date)).sort((a, b) => a - b);
-    const firstDate = dates[0];
-    const lastDate = dates[dates.length - 1];
-    // Calculate days and months
-    const diffTime = Math.abs(lastDate.getTime() - firstDate.getTime());
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1; // +1 to include both start and end day
-    const diffMonths =
-      (lastDate.getFullYear() - firstDate.getFullYear()) * 12 +
-      (lastDate.getMonth() - firstDate.getMonth()) +
-      1; // +1 for the current month
-
-    const monthlyAverage = (totalAmount / diffMonths).toFixed(2);
-    const dailyAverage = (totalAmount / diffDays).toFixed(2);
-
-    res.json({
-      monthlyAverage,
-      dailyAverage,
-      days: diffDays,
-      months: diffMonths,
-      totalAmount,
-      expenses: validExpenses,
-    });
-  } catch (error) {
-    console.error("Error calculating monthly essential expenses:", error);
-    res.status(500).json({ error: "Internal Server Error" });
   }
-});
-
+);
 
 // 📌 **Check Username Availability**
 app.post("/api/check-username", async (req, res) => {
   const { userName } = req.body;
   try {
-    const collections = await mongoose.connection.db.listCollections().toArray();
+    const collections = await mongoose.connection.db
+      .listCollections()
+      .toArray();
     const userExists = collections.some((col) => col.name === `${userName}`);
     res.json({ exists: userExists });
   } catch (error) {
@@ -1703,10 +1761,14 @@ app.post("/api/check-email", async (req, res) => {
   // Basic Email Validation Regex
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   if (!email || !emailRegex.test(email)) {
-    return res.status(400).json({ error: "Please enter a valid email address" });
+    return res
+      .status(400)
+      .json({ error: "Please enter a valid email address" });
   }
   try {
-    const collections = await mongoose.connection.db.listCollections().toArray();
+    const collections = await mongoose.connection.db
+      .listCollections()
+      .toArray();
     let emailExists = false;
     for (const collection of collections) {
       const modelName = collection.name;
@@ -1735,7 +1797,6 @@ app.post("/api/check-email", async (req, res) => {
 //         res.status(500).json(err);
 //     }
 // });
-
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
