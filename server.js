@@ -37,29 +37,16 @@ const transactionSchema = new mongoose.Schema({
 // 📌 Define Investment Schema
 const investmentSchema = new mongoose.Schema({
   user: { type: mongoose.Schema.Types.ObjectId, required: true },
-  name: { type: String, required: true },
-  amount: { type: Number, required: true }, // Initial investment amount for FD, or monthly deposit for RD
-  currentAmount: { type: Number, required: true }, // Current value with interest
-  interestRate: { type: Number, required: true }, // Annual interest rate (%)
-  investmentType: {
-    type: String,
-    required: true,
-    enum: [
-      "Savings",
-      "Fixed Deposit",
-      "Recurring Deposit",
-      "Mutual Fund",
-      "Stock",
-    ], // Added new types
-  },
+  name: { type: String, required: true }, // Initial investment amount
+  amount: { type: Number, required: true }, // Current value with interest
+  currentAmount: { type: Number, required: true }, // Annual interest rate (%)
+  interestRate: { type: Number, default: 0 }, // Changed: Removed 'required: true', added 'default: 0'
+  investmentType: { type: String, required: true }, // e.g., "Fixed Deposit", "Mutual Fund", etc.
   startDate: { type: Date, default: Date.now },
-  maturityDate: { type: Date }, // Relevant for FD/RD
+  maturityDate: { type: Date },
   lastInterestUpdate: { type: Date, default: Date.now },
   compoundingFrequency: { type: String, default: "daily" }, // daily, monthly, yearly
   description: { type: String },
-  // Additional fields for RD
-  monthlyDeposit: { type: Number }, // For Recurring Deposits
-  durationMonths: { type: Number }, // For RD/FD, in months
 });
 
 const Investment = mongoose.model("Investment", investmentSchema);
@@ -134,6 +121,66 @@ const createUserModel = (userName) => {
   console.log(`✅ Creating new model for: ${collectionName}`);
   return mongoose.model(collectionName, UserSchema, collectionName);
 };
+
+app.post("/api/register", async (req, res) => {
+  console.log("✅ Register route hit!");
+  const {
+    firstName,
+    lastName,
+    userName,
+    email,
+    password,
+    age,
+    retirementAge,
+    phoneNumber,
+    country,
+  } = req.body;
+
+  try {
+    if (!userName || !email || !password) {
+      return res
+        .status(400)
+        .json({ error: "Username, email, and password are required." });
+    }
+
+    // Check if the username already exists in the database
+    const collections = await mongoose.connection.db
+      .listCollections()
+      .toArray();
+    const existingCollection = collections.some(
+      (col) => col.name === `${userName}`
+    );
+
+    if (existingCollection) {
+      return res.status(400).json({ error: "Username already taken!" });
+    }
+
+    // Create a hashed password
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Create User Model for the new user
+    const UserModel = createUserModel(userName);
+    const newUser = new UserModel({
+      firstName,
+      lastName,
+      userName,
+      email,
+      password: hashedPassword,
+      age,
+      retirementAge,
+      phoneNumber,
+      country,
+    });
+
+    // Save User in a new collection with username
+    await newUser.save();
+
+    res.status(201).json({ message: "User registered successfully!" });
+  } catch (error) {
+    console.error("Error during registration:", error);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
 
 app.post("/api/register", async (req, res) => {
   console.log("✅ Register route hit!");
@@ -717,36 +764,9 @@ const updateDailyInterest = async () => {
         // Calculate daily interest rate
         const dailyRate = investment.interestRate / 100 / 365;
 
-        let newAmount = investment.currentAmount;
-
-        // Apply interest based on investment type
-        if (
-          investment.investmentType === "Fixed Deposit" ||
-          investment.investmentType === "Savings"
-        ) {
-          // Simple interest: A = P(1 + rt) if compoundingFrequency is not daily
-          // Or apply daily compound if frequency is daily
-          newAmount =
-            investment.currentAmount * Math.pow(1 + dailyRate, daysDiff);
-        } else if (investment.investmentType === "Recurring Deposit") {
-          // For RD, we need to consider monthly deposits and then compound
-          // This is a simplified calculation and might need a more complex formula for precise RD compounding
-          // For simplicity, let's assume monthly deposit is added, then total compounded
-          let totalAmountForRD = investment.currentAmount;
-
-          // Add monthly deposits for elapsed months if applicable
-          const monthsDiff = Math.floor(
-            (now.getFullYear() - lastUpdate.getFullYear()) * 12 +
-              (now.getMonth() - lastUpdate.getMonth())
-          );
-
-          if (investment.monthlyDeposit && monthsDiff > 0) {
-            totalAmountForRD += investment.monthlyDeposit * monthsDiff;
-          }
-
-          newAmount = totalAmountForRD * Math.pow(1 + dailyRate, daysDiff);
-        }
-        // For other types like Mutual Fund, Stock, currentAmount might be updated externally or not via interest
+        // Apply compound interest for the number of days
+        const newAmount =
+          investment.currentAmount * Math.pow(1 + dailyRate, daysDiff);
 
         // Update the investment
         await Investment.findByIdAndUpdate(investment._id, {
@@ -950,19 +970,12 @@ app.post("/investment", verifyToken, async (req, res) => {
     investmentData.user = req.user.id;
 
     // Set currentAmount equal to initial amount for new investments
-    // For FD and Savings, currentAmount starts as the initial amount.
-    // For RD, currentAmount starts as the first monthly deposit.
-    if (investmentData.investmentType === "Recurring Deposit") {
-      investmentData.currentAmount = investmentData.monthlyDeposit;
-    } else {
-      investmentData.currentAmount = investmentData.amount;
-    }
+    investmentData.currentAmount = investmentData.amount;
 
     const newInvestment = new Investment(investmentData);
     await newInvestment.save();
     res.json(newInvestment);
   } catch (err) {
-    console.error("Error adding investment:", err);
     res.status(500).json(err);
   }
 });
