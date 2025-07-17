@@ -814,16 +814,36 @@ app.post("/goals/:username", async (req, res) => {
   );
 
   try {
-    // Validate required fields
-    const requiredFields = ["name", "presentCost", "returnRate"];
-    const missingFields = requiredFields.filter(
-      (field) =>
-        goalData[field] === undefined ||
-        goalData[field] === null ||
-        goalData[field] === ""
+    // Add a debug endpoint info
+    console.log(
+      `POST /goals/${username} endpoint hit at:`,
+      new Date().toISOString()
     );
 
+    // Validate required fields with improved logic
+    const requiredFields = ["name", "presentCost", "returnRate"];
+    const missingFields = requiredFields.filter((field) => {
+      const value = goalData[field];
+      // For returnRate, specifically check if it's a number (including 0)
+      if (field === "returnRate") {
+        return (
+          value === undefined ||
+          value === null ||
+          value === "" ||
+          isNaN(Number(value))
+        );
+      }
+      // For other fields, check if they're missing or empty
+      return value === undefined || value === null || value === "";
+    });
+
     console.log(`Validation check - Missing fields:`, missingFields);
+    console.log(
+      `ReturnRate value:`,
+      goalData.returnRate,
+      `Type:`,
+      typeof goalData.returnRate
+    );
 
     if (missingFields.length > 0) {
       console.log(
