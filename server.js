@@ -788,10 +788,21 @@ setInterval(updateDailyInterest, 24 * 60 * 60 * 1000); // Run every 24 hours
 // 📌 **Goal Routes**
 
 // Get all goals for a user
-// In server.js
+app.get("/goals/:username", async (req, res) => {
+  const { username } = req.params;
 
-// ... existing imports and code ...
+  try {
+    const goals = await Goal.find({ userName: username }).sort({
+      createdAt: -1,
+    });
+    res.status(200).json(goals);
+  } catch (error) {
+    console.error(`Error fetching goals for ${username}:`, error);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
 
+// Create a new goal
 app.post("/goals/:username", async (req, res) => {
   const { username } = req.params;
   const goalData = req.body;
