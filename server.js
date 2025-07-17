@@ -71,6 +71,7 @@ const goalSchema = new mongoose.Schema({
   monthlySIP: { type: Number },
   calculatedAt: { type: String },
   createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now },
 });
 
 const Goal = mongoose.model("Goal", goalSchema);
@@ -807,13 +808,27 @@ app.post("/goals/:username", async (req, res) => {
   const { username } = req.params;
   const goalData = req.body;
 
-  console.log(`Received goal data for ${username}:`, goalData);
+  console.log(
+    `Received goal data for ${username}:`,
+    JSON.stringify(goalData, null, 2)
+  );
 
   try {
     // Validate required fields
     const requiredFields = ["name", "presentCost", "returnRate"];
-    const missingFields = requiredFields.filter((field) => !goalData[field]);
+    const missingFields = requiredFields.filter(
+      (field) =>
+        goalData[field] === undefined ||
+        goalData[field] === null ||
+        goalData[field] === ""
+    );
+
+    console.log(`Validation check - Missing fields:`, missingFields);
+
     if (missingFields.length > 0) {
+      console.log(
+        `Validation failed - missing fields: ${missingFields.join(", ")}`
+      );
       return res.status(400).json({
         error: `Missing required fields: ${missingFields.join(", ")}`,
       });
@@ -834,6 +849,9 @@ app.post("/goals/:username", async (req, res) => {
       "futureValueOfSavings",
       "monthlySIP",
     ];
+
+    console.log("Starting numeric validation...");
+
     for (const field of numericFields) {
       // Only validate if the field exists in goalData and is not a valid number
       if (
@@ -841,11 +859,24 @@ app.post("/goals/:username", async (req, res) => {
         goalData[field] !== null &&
         isNaN(parseFloat(goalData[field]))
       ) {
+        console.log(
+          `Numeric validation failed for field '${field}' with value:`,
+          goalData[field]
+        );
         return res
           .status(400)
           .json({ error: `${field} must be a valid number` });
+      } else if (goalData[field] !== undefined && goalData[field] !== null) {
+        console.log(
+          `Field '${field}' validated successfully:`,
+          goalData[field],
+          "->",
+          parseFloat(goalData[field])
+        );
       }
     }
+
+    console.log("Numeric validation passed. Creating goal object...");
 
     // Explicitly create the new goal object, parsing values and handling defaults/optionality
     const newGoal = new Goal({
@@ -878,10 +909,16 @@ app.post("/goals/:username", async (req, res) => {
         ? parseFloat(goalData.monthlySIP)
         : undefined,
       calculatedAt: new Date().toLocaleString(), // Server-side timestamp
+      updatedAt: new Date(), // Add updatedAt timestamp
       // createdAt is handled by Mongoose default
     });
 
+    console.log("Goal object created successfully, attempting to save...");
+
     const savedGoal = await newGoal.save();
+
+    console.log("Goal saved successfully to database:", savedGoal._id);
+
     res.status(201).json(savedGoal);
   } catch (error) {
     console.error(`Error creating goal for ${username}:`, error.stack); // This is key for debugging on server logs
@@ -917,7 +954,11 @@ app.put("/goals/:username/:id", async (req, res) => {
   try {
     const updatedGoal = await Goal.findOneAndUpdate(
       { _id: id, userName: username },
-      { ...updateData, calculatedAt: new Date().toLocaleString() },
+      {
+        ...updateData,
+        calculatedAt: new Date().toLocaleString(),
+        updatedAt: new Date(),
+      },
       { new: true }
     );
 
