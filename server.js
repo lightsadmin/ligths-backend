@@ -14,14 +14,23 @@ const MONGO_URI =
   "mongodb+srv://subikshapc:<db_password>@ligths.tncb6.mongodb.net/?retryWrites=true&w=majority&appName=Ligths";
 
 const app = express();
-app.use(cors());
+app.use(
+  cors({
+    origin: "*", // Allow all origins for testing
+    credentials: true,
+  })
+);
 app.use(express.json());
 app.use(bodyParser.json());
 
 // 🔹 **MongoDB Connection**
 mongoose
   .connect(process.env.MONGO_URI)
-  .then(() => console.log("✅ Connected to MongoDB Atlas"))
+  .then(async () => {
+    console.log("✅ Connected to MongoDB Atlas");
+    // Fix any problematic indexes in the Goal collection
+    await fixGoalIndexes();
+  })
   .catch((err) => console.error("❌ MongoDB Connection Error:", err));
 
 // 📌 Define Transaction Schema
@@ -75,6 +84,29 @@ const goalSchema = new mongoose.Schema({
 });
 
 const Goal = mongoose.model("Goal", goalSchema);
+
+// 🔹 **Fix Goal Collection Indexes**
+const fixGoalIndexes = async () => {
+  try {
+    const indexes = await Goal.collection.getIndexes();
+    console.log("📋 Current Goal collection indexes:", Object.keys(indexes));
+
+    // Drop problematic indexes that prevent multiple goals per user
+    const indexNames = Object.keys(indexes);
+    for (const indexName of indexNames) {
+      if (indexName.includes("email") || indexName.includes("userName_1")) {
+        console.log(`🗑️ Dropping problematic index: ${indexName}`);
+        await Goal.collection.dropIndex(indexName);
+        console.log(`✅ Successfully dropped index: ${indexName}`);
+      }
+    }
+  } catch (error) {
+    console.log(
+      "ℹ️ No problematic indexes found or error dropping indexes:",
+      error.message
+    );
+  }
+};
 
 // 🔹 **Create User Model Dynamically**
 const createUserModel = (userName) => {
@@ -788,6 +820,21 @@ setInterval(updateDailyInterest, 24 * 60 * 60 * 1000); // Run every 24 hours
 
 // 📌 **Goal Routes**
 
+// Test endpoint to verify connectivity
+app.get("/test", async (req, res) => {
+  console.log(
+    "🔍 Test endpoint hit from:",
+    req.ip,
+    "at",
+    new Date().toISOString()
+  );
+  res.status(200).json({
+    message: "Server is working!",
+    timestamp: new Date().toISOString(),
+    ip: req.ip,
+  });
+});
+
 // Get all goals for a user
 app.get("/goals/:username", async (req, res) => {
   const { username } = req.params;
@@ -1125,4 +1172,10 @@ app.post("/calculate-interest", verifyToken, async (req, res) => {
 });
 
 // 🔹 **Start Server**
-app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(
+    `📱 Mobile devices can connect at: http://192.168.30.236:${PORT}`
+  );
+  console.log(`💻 Local access: http://localhost:${PORT}`);
+});
