@@ -768,30 +768,16 @@ app.get("/transactions/:username/monthly-essential", async (req, res) => {
 const verifyToken = (req, res, next) => {
   const token = req.header("Authorization")?.replace("Bearer ", "");
 
-  console.log(
-    "🔑 Verifying token:",
-    token ? token.substring(0, 20) + "..." : "No token"
-  );
-
   if (!token) {
-    console.log("❌ No token provided");
     return res.status(401).json({ error: "Access denied. No token provided." });
   }
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-    console.log("✅ Token decoded successfully:", decoded);
     req.user = decoded;
     next();
   } catch (err) {
-    console.error("❌ Token verification failed:", err.message);
-    if (err.name === "JsonWebTokenError") {
-      return res.status(400).json({ error: "Invalid token format." });
-    } else if (err.name === "TokenExpiredError") {
-      return res.status(401).json({ error: "Token expired." });
-    } else {
-      return res.status(400).json({ error: "Token verification failed." });
-    }
+    res.status(400).json({ error: "Invalid token." });
   }
 };
 
@@ -1099,8 +1085,8 @@ app.get("/investments/:username/by-goal/:goalId", async (req, res) => {
 app.post("/investment", verifyToken, async (req, res) => {
   try {
     const investmentData = req.body;
-    // Add user ID from the token (convert to ObjectId)
-    investmentData.user = new mongoose.Types.ObjectId(req.user.id);
+    // Add user ID from the token
+    investmentData.user = req.user.id;
 
     // Set currentAmount equal to initial amount for new investments
     investmentData.currentAmount = investmentData.amount;
@@ -1119,60 +1105,22 @@ app.post("/investment", verifyToken, async (req, res) => {
   }
 });
 
-// 📌 Debug endpoint to test token validation
-app.get("/debug-token", verifyToken, async (req, res) => {
-  try {
-    console.log("🧪 Debug token - User ID:", req.user.id);
-    console.log("🧪 Debug token - User object:", req.user);
-
-    // Test ObjectId conversion
-    const userId = new mongoose.Types.ObjectId(req.user.id);
-    console.log("🧪 Debug token - Converted ObjectId:", userId);
-
-    // Count investments
-    const investmentCount = await Investment.countDocuments({ user: userId });
-    console.log("🧪 Debug token - Investment count:", investmentCount);
-
-    res.json({
-      success: true,
-      userId: req.user.id,
-      userObject: req.user,
-      convertedObjectId: userId,
-      investmentCount,
-    });
-  } catch (err) {
-    console.error("🧪 Debug token error:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
 // Get all investments
 app.get("/investments", verifyToken, async (req, res) => {
   try {
-    console.log("📊 Getting investments for user:", req.user.id);
-    console.log("📊 User object:", req.user);
-
-    // Convert string ID to ObjectId for MongoDB query
-    const userId = new mongoose.Types.ObjectId(req.user.id);
-    const investments = await Investment.find({ user: userId });
-    console.log("📊 Found investments:", investments.length);
-
+    const investments = await Investment.find({ user: req.user.id });
     res.json(investments);
   } catch (err) {
-    console.error("❌ Error fetching investments:", err);
-    res
-      .status(500)
-      .json({ error: err.message || "Failed to fetch investments" });
+    res.status(500).json(err);
   }
 });
 
 // Update investment
 app.put("/investment/:id", verifyToken, async (req, res) => {
   try {
-    const userId = new mongoose.Types.ObjectId(req.user.id);
     const investment = await Investment.findOne({
       _id: req.params.id,
-      user: userId,
+      user: req.user.id,
     });
 
     if (!investment) {
@@ -1195,10 +1143,9 @@ app.put("/investment/:id", verifyToken, async (req, res) => {
 // Delete investment
 app.delete("/investment/:id", verifyToken, async (req, res) => {
   try {
-    const userId = new mongoose.Types.ObjectId(req.user.id);
     const investment = await Investment.findOne({
       _id: req.params.id,
-      user: userId,
+      user: req.user.id,
     });
 
     if (!investment) {
