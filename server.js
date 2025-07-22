@@ -768,15 +768,23 @@ app.get("/transactions/:username/monthly-essential", async (req, res) => {
 const verifyToken = (req, res, next) => {
   const token = req.header("Authorization")?.replace("Bearer ", "");
 
+  console.log(
+    "🔑 Verifying token:",
+    token ? token.substring(0, 20) + "..." : "No token"
+  );
+
   if (!token) {
+    console.log("❌ No token provided");
     return res.status(401).json({ error: "Access denied. No token provided." });
   }
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
+    console.log("✅ Token decoded successfully:", decoded);
     req.user = decoded;
     next();
   } catch (err) {
+    console.error("❌ Token verification failed:", err.message);
     res.status(400).json({ error: "Invalid token." });
   }
 };
@@ -1108,9 +1116,15 @@ app.post("/investment", verifyToken, async (req, res) => {
 // Get all investments
 app.get("/investments", verifyToken, async (req, res) => {
   try {
+    console.log("📊 Getting investments for user:", req.user.id);
+    console.log("📊 User object:", req.user);
+
     const investments = await Investment.find({ user: req.user.id });
+    console.log("📊 Found investments:", investments.length);
+
     res.json(investments);
   } catch (err) {
+    console.error("❌ Error fetching investments:", err);
     res.status(500).json(err);
   }
 });
