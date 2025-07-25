@@ -1191,6 +1191,15 @@ app.get("/test-simple", verifyToken, async (req, res) => {
   }
 });
 
+// 📌 Simple test endpoint to check token validation
+app.get("/test-auth", verifyToken, (req, res) => {
+  res.json({
+    message: "Token is valid!",
+    user: req.user,
+    timestamp: new Date().toISOString(),
+  });
+});
+
 // Get all investments
 app.get("/investments", verifyToken, async (req, res) => {
   try {
