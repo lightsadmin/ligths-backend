@@ -439,8 +439,12 @@ app.post("/api/login", async (req, res) => {
       userName: user.userName,
     };
 
+    console.log("🔐 JWT Payload:", payload);
+    console.log("🔐 JWT_SECRET available:", JWT_SECRET ? "Yes" : "No");
+
     const token = jwt.sign(payload, JWT_SECRET, { expiresIn: "7d" });
 
+    console.log("🔐 Generated token sample:", token.substring(0, 30) + "...");
     console.log("✅ Login successful!");
     res.status(200).json({
       message: "Login successful!",
@@ -766,7 +770,10 @@ app.get("/transactions/:username/monthly-essential", async (req, res) => {
 
 // 📌 JWT Token Verification Middleware
 const verifyToken = (req, res, next) => {
-  const token = req.header("Authorization")?.replace("Bearer ", "");
+  const authHeader = req.header("Authorization");
+  console.log("🔑 Full Authorization header:", authHeader);
+
+  const token = authHeader?.replace("Bearer ", "");
 
   console.log(
     "🔑 Verifying token:",
@@ -779,12 +786,34 @@ const verifyToken = (req, res, next) => {
   }
 
   try {
+    console.log(
+      "🔍 JWT_SECRET being used:",
+      JWT_SECRET ? "Available" : "Missing"
+    );
     const decoded = jwt.verify(token, JWT_SECRET);
     console.log("✅ Token decoded successfully:", decoded);
     req.user = decoded;
     next();
   } catch (err) {
-    console.error("❌ Token verification failed:", err.message);
+    console.error("❌ Token verification failed:");
+    console.error("- Error name:", err.name);
+    console.error("- Error message:", err.message);
+    console.error(
+      "- Token sample:",
+      token ? token.substring(0, 30) + "..." : "No token"
+    );
+
+    // Provide more specific error messages
+    if (err.name === "TokenExpiredError") {
+      return res
+        .status(401)
+        .json({ error: "Token has expired. Please login again." });
+    } else if (err.name === "JsonWebTokenError") {
+      return res.status(400).json({ error: "Invalid token format." });
+    } else if (err.name === "NotBeforeError") {
+      return res.status(401).json({ error: "Token not active yet." });
+    }
+
     res.status(400).json({ error: "Invalid token." });
   }
 };
@@ -1143,6 +1172,21 @@ app.get("/test-token", verifyToken, async (req, res) => {
     });
   } catch (err) {
     console.error("🧪 Test token error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 📌 Simple token test without ObjectId conversion
+app.get("/test-simple", verifyToken, async (req, res) => {
+  try {
+    console.log("🧪 Simple test - User from token:", req.user);
+    res.json({
+      message: "Token verification successful",
+      user: req.user,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error("🧪 Simple test error:", err);
     res.status(500).json({ error: err.message });
   }
 });
