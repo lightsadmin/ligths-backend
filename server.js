@@ -66,11 +66,11 @@ const Investment = mongoose.model("Investment", investmentSchema);
 
 // 📌 Define Goal Schema
 const goalSchema = new mongoose.Schema({
+  // goalSchema is defined here FIRST
   userName: { type: String, required: true },
   name: { type: String, required: true },
   customName: { type: String },
-  // Add the description field here
-  description: { type: String }, // Add this line
+  description: { type: String }, // Added this in previous step
   presentCost: { type: Number, required: true },
   childCurrentAge: { type: Number },
   goalAge: { type: Number },
@@ -89,29 +89,7 @@ const goalSchema = new mongoose.Schema({
   updatedAt: { type: Date, default: Date.now },
 });
 
-const Goal = mongoose.model("Goal", goalSchema);const goalSchema = new mongoose.Schema({
-  userName: { type: String, required: true },
-  name: { type: String, required: true },
-  customName: { type: String },
-  presentCost: { type: Number, required: true },
-  childCurrentAge: { type: Number },
-  goalAge: { type: Number },
-  years: { type: Number },
-  currentAge: { type: Number },
-  inflation: { type: Number, default: 7.5 },
-  returnRate: { type: Number, required: true },
-  currentSip: { type: Number, default: 0 },
-  investmentType: { type: String, default: "SIP/MF" },
-  futureCost: { type: Number },
-  required: { type: Number },
-  futureValueOfSavings: { type: Number },
-  monthlySIP: { type: Number },
-  calculatedAt: { type: String },
-  createdAt: { type: Date, default: Date.now },
-  updatedAt: { type: Date, default: Date.now },
-});
-
-const Goal = mongoose.model("Goal", goalSchema);
+const Goal = mongoose.model("Goal", goalSchema); // THEN the Goal model is created
 
 // 🔹 **Fix Goal Collection Indexes**
 const fixGoalIndexes = async () => {
@@ -1015,6 +993,7 @@ app.post("/goals/:username", async (req, res) => {
       userName: username,
       name: goalData.name,
       customName: goalData.customName || undefined, // Set to undefined if empty string or null
+      description: goalData.description || undefined, // Ensure description is included
       presentCost: parseFloat(goalData.presentCost),
       // Handle optional fields: if they exist, parse them, otherwise leave undefined/null
       childCurrentAge: goalData.childCurrentAge
