@@ -45,7 +45,8 @@ const transactionSchema = new mongoose.Schema({
 
 // 📌 Define Investment Schema
 const investmentSchema = new mongoose.Schema({
-  user: { type: mongoose.Schema.Types.ObjectId, required: true },
+  // Changed user field to store userName as String
+  userName: { type: String, required: true },
   name: { type: String, required: true },
   amount: { type: Number, required: true }, // Initial investment amount
   currentAmount: { type: Number, required: true }, // Current value with interest
@@ -56,6 +57,9 @@ const investmentSchema = new mongoose.Schema({
   lastInterestUpdate: { type: Date, default: Date.now },
   compoundingFrequency: { type: String, default: "daily" }, // daily, monthly, yearly
   description: { type: String },
+  monthlyDeposit: { type: Number }, // Specific for Recurring Deposit
+  duration: { type: Number }, // Specific for Recurring Deposit
+  goalId: { type: String }, // Add goalId field
 });
 
 const Investment = mongoose.model("Investment", investmentSchema);
@@ -435,7 +439,7 @@ app.post("/api/login", async (req, res) => {
 
     // ✅ Generate JWT Token
     const payload = {
-      id: user._id,
+      id: user._id, // Keep user._id in payload for consistency if needed elsewhere, but use userName for investment lookup
       userName: user.userName,
     };
 
@@ -1121,12 +1125,12 @@ app.get("/investments/:username/by-goal/:goalId", async (req, res) => {
 // Add a new investment
 app.post("/investment", verifyToken, async (req, res) => {
   try {
-    console.log("💰 Creating investment for user:", req.user.id);
+    console.log("💰 Creating investment for user:", req.user.userName);
     console.log("💰 Investment data:", req.body);
 
     const investmentData = req.body;
-    // Add user ID from the token (convert to ObjectId)
-    investmentData.user = new mongoose.Types.ObjectId(req.user.id);
+    // Add userName from the token
+    investmentData.userName = req.user.userName;
 
     // Set currentAmount equal to initial amount for new investments
     investmentData.currentAmount = investmentData.amount;
@@ -1158,8 +1162,10 @@ app.get("/test-token", verifyToken, async (req, res) => {
     console.log("🧪 User found in DB:", user ? "Yes" : "No");
 
     // Check investments count
-    const userId = new mongoose.Types.ObjectId(req.user.id);
-    const investmentCount = await Investment.countDocuments({ user: userId });
+    const userName = req.user.userName; // Changed from userId = new mongoose.Types.ObjectId(req.user.id);
+    const investmentCount = await Investment.countDocuments({
+      userName: userName,
+    }); // Changed from user: userId
     console.log("🧪 Investment count for user:", investmentCount);
 
     res.json({
@@ -1167,8 +1173,7 @@ app.get("/test-token", verifyToken, async (req, res) => {
       user: req.user,
       userExistsInDB: !!user,
       investmentCount,
-      userIdType: typeof req.user.id,
-      userIdAsObjectId: userId.toString(),
+      // Removed userIdType and userIdAsObjectId as they are less relevant with userName filtering
     });
   } catch (err) {
     console.error("🧪 Test token error:", err);
@@ -1203,12 +1208,11 @@ app.get("/test-auth", verifyToken, (req, res) => {
 // Get all investments
 app.get("/investments", verifyToken, async (req, res) => {
   try {
-    console.log("📊 Getting investments for user:", req.user.id);
+    console.log("📊 Getting investments for user:", req.user.userName); // Changed from req.user.id
     console.log("📊 User object:", req.user);
 
-    // Convert string ID to ObjectId if needed
-    const userId = new mongoose.Types.ObjectId(req.user.id);
-    const investments = await Investment.find({ user: userId });
+    const userName = req.user.userName; // Changed from userId = new mongoose.Types.ObjectId(req.user.id);
+    const investments = await Investment.find({ userName: userName }); // Changed from user: userId
     console.log("📊 Found investments:", investments.length);
 
     res.json(investments);
@@ -1221,11 +1225,11 @@ app.get("/investments", verifyToken, async (req, res) => {
 // Update investment
 app.put("/investment/:id", verifyToken, async (req, res) => {
   try {
-    const userId = new mongoose.Types.ObjectId(req.user.id);
+    const userName = req.user.userName; // Changed from userId = new mongoose.Types.ObjectId(req.user.id);
     const investment = await Investment.findOne({
       _id: req.params.id,
-      user: userId,
-    });
+      userName: userName,
+    }); // Changed from user: userId
 
     if (!investment) {
       return res
@@ -1247,11 +1251,11 @@ app.put("/investment/:id", verifyToken, async (req, res) => {
 // Delete investment
 app.delete("/investment/:id", verifyToken, async (req, res) => {
   try {
-    const userId = new mongoose.Types.ObjectId(req.user.id);
+    const userName = req.user.userName; // Changed from userId = new mongoose.Types.ObjectId(req.user.id);
     const investment = await Investment.findOne({
       _id: req.params.id,
-      user: userId,
-    });
+      userName: userName,
+    }); // Changed from user: userId
 
     if (!investment) {
       return res
