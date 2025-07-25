@@ -69,6 +69,30 @@ const goalSchema = new mongoose.Schema({
   userName: { type: String, required: true },
   name: { type: String, required: true },
   customName: { type: String },
+  // Add the description field here
+  description: { type: String }, // Add this line
+  presentCost: { type: Number, required: true },
+  childCurrentAge: { type: Number },
+  goalAge: { type: Number },
+  years: { type: Number },
+  currentAge: { type: Number },
+  inflation: { type: Number, default: 7.5 },
+  returnRate: { type: Number, required: true },
+  currentSip: { type: Number, default: 0 },
+  investmentType: { type: String, default: "SIP/MF" },
+  futureCost: { type: Number },
+  required: { type: Number },
+  futureValueOfSavings: { type: Number },
+  monthlySIP: { type: Number },
+  calculatedAt: { type: String },
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now },
+});
+
+const Goal = mongoose.model("Goal", goalSchema);const goalSchema = new mongoose.Schema({
+  userName: { type: String, required: true },
+  name: { type: String, required: true },
+  customName: { type: String },
   presentCost: { type: Number, required: true },
   childCurrentAge: { type: Number },
   goalAge: { type: Number },
