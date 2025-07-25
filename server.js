@@ -768,15 +768,23 @@ app.get("/transactions/:username/monthly-essential", async (req, res) => {
 const verifyToken = (req, res, next) => {
   const token = req.header("Authorization")?.replace("Bearer ", "");
 
+  console.log(
+    "🔑 Verifying token:",
+    token ? token.substring(0, 20) + "..." : "No token"
+  );
+
   if (!token) {
+    console.log("❌ No token provided");
     return res.status(401).json({ error: "Access denied. No token provided." });
   }
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
+    console.log("✅ Token decoded successfully:", decoded);
     req.user = decoded;
     next();
   } catch (err) {
+    console.error("❌ Token verification failed:", err.message);
     res.status(400).json({ error: "Invalid token." });
   }
 };
@@ -1084,9 +1092,12 @@ app.get("/investments/:username/by-goal/:goalId", async (req, res) => {
 // Add a new investment
 app.post("/investment", verifyToken, async (req, res) => {
   try {
+    console.log("💰 Creating investment for user:", req.user.id);
+    console.log("💰 Investment data:", req.body);
+
     const investmentData = req.body;
-    // Add user ID from the token
-    investmentData.user = req.user.id;
+    // Add user ID from the token (convert to ObjectId)
+    investmentData.user = new mongoose.Types.ObjectId(req.user.id);
 
     // Set currentAmount equal to initial amount for new investments
     investmentData.currentAmount = investmentData.amount;
@@ -1098,29 +1109,69 @@ app.post("/investment", verifyToken, async (req, res) => {
 
     const newInvestment = new Investment(investmentData);
     await newInvestment.save();
+    console.log("✅ Investment created successfully:", newInvestment._id);
     res.json(newInvestment);
   } catch (err) {
-    console.error("Error creating investment:", err);
+    console.error("❌ Error creating investment:", err);
     res.status(500).json({ error: err.message || "Failed to add investment" });
+  }
+});
+
+// 📌 Test endpoint to debug token and user issues
+app.get("/test-token", verifyToken, async (req, res) => {
+  try {
+    console.log("🧪 Test token endpoint - User from token:", req.user);
+
+    // Check if user exists in database
+    const UserModel = createUserModel(req.user.userName);
+    const user = await UserModel.findById(req.user.id);
+
+    console.log("🧪 User found in DB:", user ? "Yes" : "No");
+
+    // Check investments count
+    const userId = new mongoose.Types.ObjectId(req.user.id);
+    const investmentCount = await Investment.countDocuments({ user: userId });
+    console.log("🧪 Investment count for user:", investmentCount);
+
+    res.json({
+      message: "Token is valid",
+      user: req.user,
+      userExistsInDB: !!user,
+      investmentCount,
+      userIdType: typeof req.user.id,
+      userIdAsObjectId: userId.toString(),
+    });
+  } catch (err) {
+    console.error("🧪 Test token error:", err);
+    res.status(500).json({ error: err.message });
   }
 });
 
 // Get all investments
 app.get("/investments", verifyToken, async (req, res) => {
   try {
-    const investments = await Investment.find({ user: req.user.id });
+    console.log("📊 Getting investments for user:", req.user.id);
+    console.log("📊 User object:", req.user);
+
+    // Convert string ID to ObjectId if needed
+    const userId = new mongoose.Types.ObjectId(req.user.id);
+    const investments = await Investment.find({ user: userId });
+    console.log("📊 Found investments:", investments.length);
+
     res.json(investments);
   } catch (err) {
-    res.status(500).json(err);
+    console.error("❌ Error fetching investments:", err);
+    res.status(500).json({ error: err.message });
   }
 });
 
 // Update investment
 app.put("/investment/:id", verifyToken, async (req, res) => {
   try {
+    const userId = new mongoose.Types.ObjectId(req.user.id);
     const investment = await Investment.findOne({
       _id: req.params.id,
-      user: req.user.id,
+      user: userId,
     });
 
     if (!investment) {
@@ -1143,9 +1194,10 @@ app.put("/investment/:id", verifyToken, async (req, res) => {
 // Delete investment
 app.delete("/investment/:id", verifyToken, async (req, res) => {
   try {
+    const userId = new mongoose.Types.ObjectId(req.user.id);
     const investment = await Investment.findOne({
       _id: req.params.id,
-      user: req.user.id,
+      user: userId,
     });
 
     if (!investment) {
