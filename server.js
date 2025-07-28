@@ -5,10 +5,17 @@ const cors = require("cors");
 const bodyParser = require("body-parser");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
+const nodemailer = require("nodemailer");
+const crypto = require("crypto");
 const ObjectId = mongoose.Types.ObjectId;
 
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET || "mysecretkey";
+const RESET_TOKEN_SECRET =
+  process.env.RESET_TOKEN_SECRET || "resettoken_secret_key";
+const EMAIL_USER = process.env.EMAIL_USER; // Your email
+const EMAIL_PASS = process.env.EMAIL_PASS; // Your email password/app password
+const FRONTEND_URL = process.env.FRONTEND_URL || "https://your-app.com"; // Your app URL
 const MONGO_URI =
   process.env.MONGO_URI ||
   "mongodb+srv://subikshapc:<db_password>@ligths.tncb6.mongodb.net/?retryWrites=true&w=majority&appName=Ligths";
@@ -45,8 +52,7 @@ const transactionSchema = new mongoose.Schema({
 
 // 📌 Define Investment Schema
 const investmentSchema = new mongoose.Schema({
-  // Changed user field to store userName as String
-  userName: { type: String, required: true },
+  user: { type: mongoose.Schema.Types.ObjectId, required: true },
   name: { type: String, required: true },
   amount: { type: Number, required: true }, // Initial investment amount
   currentAmount: { type: Number, required: true }, // Current value with interest
@@ -57,20 +63,15 @@ const investmentSchema = new mongoose.Schema({
   lastInterestUpdate: { type: Date, default: Date.now },
   compoundingFrequency: { type: String, default: "daily" }, // daily, monthly, yearly
   description: { type: String },
-  monthlyDeposit: { type: Number }, // Specific for Recurring Deposit
-  duration: { type: Number }, // Specific for Recurring Deposit
-  goalId: { type: String }, // Add goalId field
 });
 
 const Investment = mongoose.model("Investment", investmentSchema);
 
 // 📌 Define Goal Schema
 const goalSchema = new mongoose.Schema({
-  // goalSchema is defined here FIRST
   userName: { type: String, required: true },
   name: { type: String, required: true },
   customName: { type: String },
-  description: { type: String }, // Added this in previous step
   presentCost: { type: Number, required: true },
   childCurrentAge: { type: Number },
   goalAge: { type: Number },
@@ -89,7 +90,7 @@ const goalSchema = new mongoose.Schema({
   updatedAt: { type: Date, default: Date.now },
 });
 
-const Goal = mongoose.model("Goal", goalSchema); // THEN the Goal model is created
+const Goal = mongoose.model("Goal", goalSchema);
 
 // 🔹 **Fix Goal Collection Indexes**
 const fixGoalIndexes = async () => {
@@ -441,7 +442,7 @@ app.post("/api/login", async (req, res) => {
 
     // ✅ Generate JWT Token
     const payload = {
-      id: user._id, // Keep user._id in payload for consistency if needed elsewhere, but use userName for investment lookup
+      id: user._id,
       userName: user.userName,
     };
 
@@ -469,6 +470,207 @@ app.post("/api/login", async (req, res) => {
   } catch (error) {
     console.error("❌ Error during login:", error);
     res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+// 📧 **Email Configuration for Password Reset**
+const transporter = nodemailer.createTransporter({
+  service: "gmail", // You can use other services like outlook, yahoo, etc.
+  auth: {
+    user: EMAIL_USER,
+    pass: EMAIL_PASS, // Use app-specific password for Gmail
+  },
+});
+
+// 📌 **Forgot Password Route**
+app.post("/api/forgot-password", async (req, res) => {
+  const { email } = req.body;
+
+  try {
+    console.log("🔐 Forgot password request for email:", email);
+
+    if (!email) {
+      return res.status(400).json({ error: "Email is required." });
+    }
+
+    // Search for user across all user collections
+    let userFound = null;
+    let userModel = null;
+    let userName = null;
+
+    // Get all collections in the database
+    const collections = await mongoose.connection.db
+      .listCollections()
+      .toArray();
+
+    for (const collection of collections) {
+      if (collection.name.endsWith("_users")) {
+        const collectionUserName = collection.name.replace("_users", "");
+        const UserModel = createUserModel(collectionUserName);
+
+        const user = await UserModel.findOne({ email: email });
+        if (user) {
+          userFound = user;
+          userModel = UserModel;
+          userName = collectionUserName;
+          break;
+        }
+      }
+    }
+
+    // Always return success to prevent email enumeration attacks
+    if (!userFound) {
+      console.log("❗ User not found for email:", email);
+      return res.status(200).json({
+        message:
+          "If an account with that email exists, a password reset link has been sent.",
+      });
+    }
+
+    // Generate secure reset token
+    const resetToken = jwt.sign(
+      {
+        id: userFound._id,
+        email: userFound.email,
+        userName: userName,
+        purpose: "password_reset",
+      },
+      RESET_TOKEN_SECRET,
+      { expiresIn: "15m" } // Token expires in 15 minutes
+    );
+
+    // Create reset link
+    const resetLink = `${FRONTEND_URL}/reset-password?token=${resetToken}`;
+
+    // Email template
+    const emailHtml = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2 style="color: #3498db;">Password Reset Request</h2>
+        <p>Hello ${userFound.firstName || "User"},</p>
+        <p>You have requested to reset your password for your Lights Finance account.</p>
+        <p>Click the button below to reset your password:</p>
+        <div style="text-align: center; margin: 30px 0;">
+          <a href="${resetLink}" 
+             style="background-color: #3498db; color: white; padding: 12px 30px; 
+                    text-decoration: none; border-radius: 5px; display: inline-block;">
+            Reset Password
+          </a>
+        </div>
+        <p><strong>This link will expire in 15 minutes.</strong></p>
+        <p>If you did not request this password reset, please ignore this email.</p>
+        <hr style="margin: 30px 0;">
+        <p style="color: #7f8c8d; font-size: 12px;">
+          If the button doesn't work, copy and paste this link into your browser:<br>
+          ${resetLink}
+        </p>
+      </div>
+    `;
+
+    // Send email
+    await transporter.sendMail({
+      from: `"Lights Finance" <${EMAIL_USER}>`,
+      to: email,
+      subject: "Password Reset Request",
+      html: emailHtml,
+    });
+
+    console.log("✅ Password reset email sent to:", email);
+    res.status(200).json({
+      message:
+        "If an account with that email exists, a password reset link has been sent.",
+    });
+  } catch (error) {
+    console.error("❌ Error in forgot password:", error);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+// 📌 **Reset Password Route**
+app.post("/api/reset-password", async (req, res) => {
+  const { token, newPassword } = req.body;
+
+  try {
+    console.log("🔐 Password reset attempt with token");
+
+    if (!token || !newPassword) {
+      return res
+        .status(400)
+        .json({ error: "Token and new password are required." });
+    }
+
+    if (newPassword.length < 6) {
+      return res
+        .status(400)
+        .json({ error: "Password must be at least 6 characters long." });
+    }
+
+    // Verify reset token
+    let decoded;
+    try {
+      decoded = jwt.verify(token, RESET_TOKEN_SECRET);
+    } catch (err) {
+      if (err.name === "TokenExpiredError") {
+        return res
+          .status(400)
+          .json({ error: "Reset link has expired. Please request a new one." });
+      }
+      return res.status(400).json({ error: "Invalid reset token." });
+    }
+
+    if (decoded.purpose !== "password_reset") {
+      return res.status(400).json({ error: "Invalid token purpose." });
+    }
+
+    // Find user
+    const UserModel = createUserModel(decoded.userName);
+    const user = await UserModel.findById(decoded.id);
+
+    if (!user) {
+      return res.status(404).json({ error: "User not found." });
+    }
+
+    // Hash new password
+    const saltRounds = 10;
+    const hashedPassword = await bcrypt.hash(newPassword, saltRounds);
+
+    // Update password
+    await UserModel.findByIdAndUpdate(decoded.id, {
+      password: hashedPassword,
+    });
+
+    console.log("✅ Password reset successful for user:", decoded.userName);
+    res.status(200).json({ message: "Password has been reset successfully." });
+  } catch (error) {
+    console.error("❌ Error in reset password:", error);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+// 📌 **Verify Reset Token Route** (Optional - for frontend validation)
+app.post("/api/verify-reset-token", async (req, res) => {
+  const { token } = req.body;
+
+  try {
+    if (!token) {
+      return res.status(400).json({ error: "Token is required." });
+    }
+
+    // Verify token
+    const decoded = jwt.verify(token, RESET_TOKEN_SECRET);
+
+    if (decoded.purpose !== "password_reset") {
+      return res.status(400).json({ error: "Invalid token purpose." });
+    }
+
+    res.status(200).json({
+      message: "Token is valid.",
+      email: decoded.email,
+    });
+  } catch (err) {
+    if (err.name === "TokenExpiredError") {
+      return res.status(400).json({ error: "Reset link has expired." });
+    }
+    return res.status(400).json({ error: "Invalid token." });
   }
 });
 
@@ -993,7 +1195,6 @@ app.post("/goals/:username", async (req, res) => {
       userName: username,
       name: goalData.name,
       customName: goalData.customName || undefined, // Set to undefined if empty string or null
-      description: goalData.description || undefined, // Ensure description is included
       presentCost: parseFloat(goalData.presentCost),
       // Handle optional fields: if they exist, parse them, otherwise leave undefined/null
       childCurrentAge: goalData.childCurrentAge
@@ -1128,12 +1329,12 @@ app.get("/investments/:username/by-goal/:goalId", async (req, res) => {
 // Add a new investment
 app.post("/investment", verifyToken, async (req, res) => {
   try {
-    console.log("💰 Creating investment for user:", req.user.userName);
+    console.log("💰 Creating investment for user:", req.user.id);
     console.log("💰 Investment data:", req.body);
 
     const investmentData = req.body;
-    // Add userName from the token
-    investmentData.userName = req.user.userName;
+    // Add user ID from the token (convert to ObjectId)
+    investmentData.user = new mongoose.Types.ObjectId(req.user.id);
 
     // Set currentAmount equal to initial amount for new investments
     investmentData.currentAmount = investmentData.amount;
@@ -1165,10 +1366,8 @@ app.get("/test-token", verifyToken, async (req, res) => {
     console.log("🧪 User found in DB:", user ? "Yes" : "No");
 
     // Check investments count
-    const userName = req.user.userName; // Changed from userId = new mongoose.Types.ObjectId(req.user.id);
-    const investmentCount = await Investment.countDocuments({
-      userName: userName,
-    }); // Changed from user: userId
+    const userId = new mongoose.Types.ObjectId(req.user.id);
+    const investmentCount = await Investment.countDocuments({ user: userId });
     console.log("🧪 Investment count for user:", investmentCount);
 
     res.json({
@@ -1176,7 +1375,8 @@ app.get("/test-token", verifyToken, async (req, res) => {
       user: req.user,
       userExistsInDB: !!user,
       investmentCount,
-      // Removed userIdType and userIdAsObjectId as they are less relevant with userName filtering
+      userIdType: typeof req.user.id,
+      userIdAsObjectId: userId.toString(),
     });
   } catch (err) {
     console.error("🧪 Test token error:", err);
@@ -1208,14 +1408,31 @@ app.get("/test-auth", verifyToken, (req, res) => {
   });
 });
 
+// 📌 Debug endpoint to check stored user info format
+app.get("/debug-login", async (req, res) => {
+  try {
+    res.json({
+      message: "Debug login endpoint",
+      jwtSecret: JWT_SECRET ? "Available" : "Missing",
+      jwtSecretSample: JWT_SECRET
+        ? JWT_SECRET.substring(0, 10) + "..."
+        : "None",
+      timestamp: new Date().toISOString(),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Get all investments
 app.get("/investments", verifyToken, async (req, res) => {
   try {
-    console.log("📊 Getting investments for user:", req.user.userName); // Changed from req.user.id
+    console.log("📊 Getting investments for user:", req.user.id);
     console.log("📊 User object:", req.user);
 
-    const userName = req.user.userName; // Changed from userId = new mongoose.Types.ObjectId(req.user.id);
-    const investments = await Investment.find({ userName: userName }); // Changed from user: userId
+    // Convert string ID to ObjectId if needed
+    const userId = new mongoose.Types.ObjectId(req.user.id);
+    const investments = await Investment.find({ user: userId });
     console.log("📊 Found investments:", investments.length);
 
     res.json(investments);
@@ -1228,11 +1445,11 @@ app.get("/investments", verifyToken, async (req, res) => {
 // Update investment
 app.put("/investment/:id", verifyToken, async (req, res) => {
   try {
-    const userName = req.user.userName; // Changed from userId = new mongoose.Types.ObjectId(req.user.id);
+    const userId = new mongoose.Types.ObjectId(req.user.id);
     const investment = await Investment.findOne({
       _id: req.params.id,
-      userName: userName,
-    }); // Changed from user: userId
+      user: userId,
+    });
 
     if (!investment) {
       return res
@@ -1254,11 +1471,11 @@ app.put("/investment/:id", verifyToken, async (req, res) => {
 // Delete investment
 app.delete("/investment/:id", verifyToken, async (req, res) => {
   try {
-    const userName = req.user.userName; // Changed from userId = new mongoose.Types.ObjectId(req.user.id);
+    const userId = new mongoose.Types.ObjectId(req.user.id);
     const investment = await Investment.findOne({
       _id: req.params.id,
-      userName: userName,
-    }); // Changed from user: userId
+      user: userId,
+    });
 
     if (!investment) {
       return res
