@@ -30,7 +30,21 @@ app.use(
 app.use(express.json());
 app.use(bodyParser.json());
 
-// 🔹 **MongoDB Connection**
+// � **Health Check Endpoint**
+app.get("/api/health", (req, res) => {
+  res.json({
+    status: "ok",
+    message: "Server is running",
+    timestamp: new Date().toISOString(),
+    endpoints: {
+      login: "/api/login",
+      forgotPassword: "/api/forgot-password",
+      resetPassword: "/api/reset-password",
+    },
+  });
+});
+
+// �🔹 **MongoDB Connection**
 mongoose
   .connect(process.env.MONGO_URI)
   .then(async () => {
@@ -474,48 +488,102 @@ app.post("/api/login", async (req, res) => {
 });
 
 // 📧 **Email Configuration for Password Reset**
-const transporter = nodemailer.createTransporter({
-  service: "gmail", // You can use other services like outlook, yahoo, etc.
-  auth: {
-    user: EMAIL_USER,
-    pass: EMAIL_PASS, // Use app-specific password for Gmail
-  },
+let transporter = null;
+
+// Only create transporter if email credentials are provided
+if (EMAIL_USER && EMAIL_PASS) {
+  try {
+    transporter = nodemailer.createTransport({
+      service: "gmail", // You can use other services like outlook, yahoo, etc.
+      auth: {
+        user: EMAIL_USER,
+        pass: EMAIL_PASS, // Use app-specific password for Gmail
+      },
+    });
+    console.log("✅ Email transporter configured successfully");
+  } catch (error) {
+    console.error("❌ Error configuring email transporter:", error);
+  }
+} else {
+  console.warn(
+    "⚠️ Email credentials not provided. Password reset functionality will be disabled."
+  );
+}
+
+// 📌 **Test Route for Password Reset**
+app.post("/api/test-forgot", async (req, res) => {
+  console.log("🧪 Test forgot password route hit");
+  res.json({ message: "Test route working", body: req.body });
 });
 
 // 📌 **Forgot Password Route**
 app.post("/api/forgot-password", async (req, res) => {
+  console.log("🔐 Forgot password route accessed");
+  console.log("🔐 Request body:", req.body);
+
   const { email } = req.body;
 
   try {
-    console.log("🔐 Forgot password request for email:", email);
+    console.log("🔐 Processing forgot password for email:", email);
 
     if (!email) {
+      console.log("❌ No email provided");
       return res.status(400).json({ error: "Email is required." });
+    }
+
+    // Email validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      console.log("❌ Invalid email format:", email);
+      return res
+        .status(400)
+        .json({ error: "Please provide a valid email address." });
+    }
+
+    // Check if email service is configured
+    if (!transporter) {
+      console.error("❌ Email service not configured");
+      return res.status(200).json({
+        message:
+          "Password reset functionality is currently unavailable. Please contact support.",
+      });
     }
 
     // Search for user across all user collections
     let userFound = null;
-    let userModel = null;
     let userName = null;
 
-    // Get all collections in the database
-    const collections = await mongoose.connection.db
-      .listCollections()
-      .toArray();
+    try {
+      // Get all collections in the database
+      const collections = await mongoose.connection.db
+        .listCollections()
+        .toArray();
+      console.log("🔍 Searching across collections for email:", email);
 
-    for (const collection of collections) {
-      if (collection.name.endsWith("_users")) {
-        const collectionUserName = collection.name.replace("_users", "");
-        const UserModel = createUserModel(collectionUserName);
-
-        const user = await UserModel.findOne({ email: email });
-        if (user) {
-          userFound = user;
-          userModel = UserModel;
-          userName = collectionUserName;
-          break;
+      for (const collection of collections) {
+        if (collection.name.endsWith("_users")) {
+          const collectionUserName = collection.name.replace("_users", "");
+          try {
+            const UserModel = createUserModel(collectionUserName);
+            const user = await UserModel.findOne({ email: email });
+            if (user) {
+              userFound = user;
+              userName = collectionUserName;
+              console.log("✅ User found in collection:", collectionUserName);
+              break;
+            }
+          } catch (collectionError) {
+            console.error(
+              `❌ Error searching in collection ${collectionUserName}:`,
+              collectionError.message
+            );
+            continue;
+          }
         }
       }
+    } catch (dbError) {
+      console.error("❌ Database search error:", dbError.message);
+      return res.status(500).json({ error: "Database error occurred." });
     }
 
     // Always return success to prevent email enumeration attacks
@@ -527,61 +595,68 @@ app.post("/api/forgot-password", async (req, res) => {
       });
     }
 
-    // Generate secure reset token
-    const resetToken = jwt.sign(
-      {
-        id: userFound._id,
-        email: userFound.email,
-        userName: userName,
-        purpose: "password_reset",
-      },
-      RESET_TOKEN_SECRET,
-      { expiresIn: "15m" } // Token expires in 15 minutes
-    );
+    try {
+      // Generate secure reset token
+      const resetToken = jwt.sign(
+        {
+          id: userFound._id,
+          email: userFound.email,
+          userName: userName,
+          purpose: "password_reset",
+        },
+        RESET_TOKEN_SECRET,
+        { expiresIn: "15m" } // Token expires in 15 minutes
+      );
 
-    // Create reset link
-    const resetLink = `${FRONTEND_URL}/reset-password?token=${resetToken}`;
+      // Create reset link (for now, just return success - you can configure the frontend URL later)
+      const resetLink = `${FRONTEND_URL}/reset-password?token=${resetToken}`;
 
-    // Email template
-    const emailHtml = `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-        <h2 style="color: #3498db;">Password Reset Request</h2>
-        <p>Hello ${userFound.firstName || "User"},</p>
-        <p>You have requested to reset your password for your Lights Finance account.</p>
-        <p>Click the button below to reset your password:</p>
-        <div style="text-align: center; margin: 30px 0;">
-          <a href="${resetLink}" 
-             style="background-color: #3498db; color: white; padding: 12px 30px; 
-                    text-decoration: none; border-radius: 5px; display: inline-block;">
-            Reset Password
-          </a>
+      // Email template
+      const emailHtml = `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2 style="color: #3498db;">Password Reset Request</h2>
+          <p>Hello ${userFound.firstName || "User"},</p>
+          <p>You have requested to reset your password for your Lights Finance account.</p>
+          <p>Click the button below to reset your password:</p>
+          <div style="text-align: center; margin: 30px 0;">
+            <a href="${resetLink}" 
+               style="background-color: #3498db; color: white; padding: 12px 30px; 
+                      text-decoration: none; border-radius: 5px; display: inline-block;">
+              Reset Password
+            </a>
+          </div>
+          <p><strong>This link will expire in 15 minutes.</strong></p>
+          <p>If you did not request this password reset, please ignore this email.</p>
+          <hr style="margin: 30px 0;">
+          <p style="color: #7f8c8d; font-size: 12px;">
+            Reset Link: ${resetLink}
+          </p>
         </div>
-        <p><strong>This link will expire in 15 minutes.</strong></p>
-        <p>If you did not request this password reset, please ignore this email.</p>
-        <hr style="margin: 30px 0;">
-        <p style="color: #7f8c8d; font-size: 12px;">
-          If the button doesn't work, copy and paste this link into your browser:<br>
-          ${resetLink}
-        </p>
-      </div>
-    `;
+      `;
 
-    // Send email
-    await transporter.sendMail({
-      from: `"Lights Finance" <${EMAIL_USER}>`,
-      to: email,
-      subject: "Password Reset Request",
-      html: emailHtml,
-    });
+      // Send email
+      await transporter.sendMail({
+        from: `"Lights Finance" <${EMAIL_USER}>`,
+        to: email,
+        subject: "Password Reset Request - Lights Finance",
+        html: emailHtml,
+      });
 
-    console.log("✅ Password reset email sent to:", email);
+      console.log("✅ Password reset email sent to:", email);
+    } catch (emailError) {
+      console.error("❌ Error sending email:", emailError.message);
+      // Still return success to prevent email enumeration
+    }
+
     res.status(200).json({
       message:
         "If an account with that email exists, a password reset link has been sent.",
     });
   } catch (error) {
-    console.error("❌ Error in forgot password:", error);
-    res.status(500).json({ error: "Internal Server Error" });
+    console.error("❌ Unexpected error in forgot password:", error);
+    res
+      .status(500)
+      .json({ error: "An unexpected error occurred. Please try again later." });
   }
 });
 
