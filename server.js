@@ -5,17 +5,10 @@ const cors = require("cors");
 const bodyParser = require("body-parser");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
-const nodemailer = require("nodemailer");
-const crypto = require("crypto");
 const ObjectId = mongoose.Types.ObjectId;
 
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET || "mysecretkey";
-const RESET_TOKEN_SECRET =
-  process.env.RESET_TOKEN_SECRET || "resettoken_secret_key";
-const EMAIL_USER = process.env.EMAIL_USER; // Your email
-const EMAIL_PASS = process.env.EMAIL_PASS; // Your email password/app password
-const FRONTEND_URL = process.env.FRONTEND_URL || "https://your-app.com"; // Your app URL
 const MONGO_URI =
   process.env.MONGO_URI ||
   "mongodb+srv://subikshapc:<db_password>@ligths.tncb6.mongodb.net/?retryWrites=true&w=majority&appName=Ligths";
@@ -30,21 +23,7 @@ app.use(
 app.use(express.json());
 app.use(bodyParser.json());
 
-// 📌 **Health Check Endpoint**
-app.get("/api/health", (req, res) => {
-  res.json({
-    status: "ok",
-    message: "Server is running",
-    timestamp: new Date().toISOString(),
-    endpoints: {
-      login: "/api/login",
-      forgotPassword: "/api/forgot-password",
-      resetPassword: "/api/reset-password",
-    },
-  });
-});
-
-// � **MongoDB Connection**
+// 🔹 **MongoDB Connection**
 mongoose
   .connect(process.env.MONGO_URI)
   .then(async () => {
@@ -66,7 +45,8 @@ const transactionSchema = new mongoose.Schema({
 
 // 📌 Define Investment Schema
 const investmentSchema = new mongoose.Schema({
-  user: { type: mongoose.Schema.Types.ObjectId, required: true },
+  // Changed user field to store userName as String
+  userName: { type: String, required: true },
   name: { type: String, required: true },
   amount: { type: Number, required: true }, // Initial investment amount
   currentAmount: { type: Number, required: true }, // Current value with interest
@@ -77,16 +57,20 @@ const investmentSchema = new mongoose.Schema({
   lastInterestUpdate: { type: Date, default: Date.now },
   compoundingFrequency: { type: String, default: "daily" }, // daily, monthly, yearly
   description: { type: String },
+  monthlyDeposit: { type: Number }, // Specific for Recurring Deposit
+  duration: { type: Number }, // Specific for Recurring Deposit
+  goalId: { type: String }, // Add goalId field
 });
 
 const Investment = mongoose.model("Investment", investmentSchema);
 
 // 📌 Define Goal Schema
 const goalSchema = new mongoose.Schema({
+  // goalSchema is defined here FIRST
   userName: { type: String, required: true },
   name: { type: String, required: true },
   customName: { type: String },
-  description: { type: String, required: false },
+  description: { type: String }, // Added this in previous step
   presentCost: { type: Number, required: true },
   childCurrentAge: { type: Number },
   goalAge: { type: Number },
@@ -105,9 +89,9 @@ const goalSchema = new mongoose.Schema({
   updatedAt: { type: Date, default: Date.now },
 });
 
-const Goal = mongoose.model("Goal", goalSchema);
+const Goal = mongoose.model("Goal", goalSchema); // THEN the Goal model is created
 
-// 🔹 **Fix Goal Collection Indexes and Schema**
+// 🔹 **Fix Goal Collection Indexes**
 const fixGoalIndexes = async () => {
   try {
     const indexes = await Goal.collection.getIndexes();
@@ -121,34 +105,6 @@ const fixGoalIndexes = async () => {
         await Goal.collection.dropIndex(indexName);
         console.log(`✅ Successfully dropped index: ${indexName}`);
       }
-    }
-
-    // Fix schema validation - remove description requirement
-    try {
-      await mongoose.connection.db.command({
-        collMod: "goals",
-        validator: {
-          $jsonSchema: {
-            bsonType: "object",
-            required: ["userName", "name", "presentCost", "returnRate"],
-            properties: {
-              userName: { bsonType: "string" },
-              name: { bsonType: "string" },
-              customName: { bsonType: "string" },
-              description: { bsonType: "string" }, // Not required
-              presentCost: { bsonType: "number" },
-              returnRate: { bsonType: "number" },
-              // Other fields are optional
-            },
-          },
-        },
-      });
-      console.log("✅ Goal collection schema validation updated");
-    } catch (schemaError) {
-      console.log(
-        "ℹ️ Schema validation update not needed or failed:",
-        schemaError.message
-      );
     }
   } catch (error) {
     console.log(
@@ -204,6 +160,66 @@ const createUserModel = (userName) => {
   console.log(`✅ Creating new model for: ${collectionName}`);
   return mongoose.model(collectionName, UserSchema, collectionName);
 };
+
+app.post("/api/register", async (req, res) => {
+  console.log("✅ Register route hit!");
+  const {
+    firstName,
+    lastName,
+    userName,
+    email,
+    password,
+    age,
+    retirementAge,
+    phoneNumber,
+    country,
+  } = req.body;
+
+  try {
+    if (!userName || !email || !password) {
+      return res
+        .status(400)
+        .json({ error: "Username, email, and password are required." });
+    }
+
+    // Check if the username already exists in the database
+    const collections = await mongoose.connection.db
+      .listCollections()
+      .toArray();
+    const existingCollection = collections.some(
+      (col) => col.name === `${userName}`
+    );
+
+    if (existingCollection) {
+      return res.status(400).json({ error: "Username already taken!" });
+    }
+
+    // Create a hashed password
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Create User Model for the new user
+    const UserModel = createUserModel(userName);
+    const newUser = new UserModel({
+      firstName,
+      lastName,
+      userName,
+      email,
+      password: hashedPassword,
+      age,
+      retirementAge,
+      phoneNumber,
+      country,
+    });
+
+    // Save User in a new collection with username
+    await newUser.save();
+
+    res.status(201).json({ message: "User registered successfully!" });
+  } catch (error) {
+    console.error("Error during registration:", error);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
 
 app.post("/api/register", async (req, res) => {
   console.log("✅ Register route hit!");
@@ -425,7 +441,7 @@ app.post("/api/login", async (req, res) => {
 
     // ✅ Generate JWT Token
     const payload = {
-      id: user._id,
+      id: user._id, // Keep user._id in payload for consistency if needed elsewhere, but use userName for investment lookup
       userName: user.userName,
     };
 
@@ -453,268 +469,6 @@ app.post("/api/login", async (req, res) => {
   } catch (error) {
     console.error("❌ Error during login:", error);
     res.status(500).json({ error: "Internal Server Error" });
-  }
-});
-
-// 📧 **Email Configuration for Password Reset**
-let transporter = null;
-
-// Only create transporter if email credentials are provided
-if (EMAIL_USER && EMAIL_PASS) {
-  try {
-    transporter = nodemailer.createTransport({
-      service: "gmail", // You can use other services like outlook, yahoo, etc.
-      auth: {
-        user: EMAIL_USER,
-        pass: EMAIL_PASS, // Use app-specific password for Gmail
-      },
-    });
-    console.log("✅ Email transporter configured successfully");
-  } catch (error) {
-    console.error("❌ Error configuring email transporter:", error);
-  }
-} else {
-  console.warn(
-    "⚠️ Email credentials not provided. Password reset functionality will be disabled."
-  );
-}
-
-// 📌 **Test Route for Password Reset**
-app.post("/api/test-forgot", async (req, res) => {
-  console.log("🧪 Test forgot password route hit");
-  res.json({ message: "Test route working", body: req.body });
-});
-
-// 📌 **Forgot Password Route**
-app.post("/api/forgot-password", async (req, res) => {
-  console.log("🔐 Forgot password route accessed");
-  console.log("🔐 Request body:", req.body);
-
-  const { email } = req.body;
-
-  try {
-    console.log("🔐 Processing forgot password for email:", email);
-
-    if (!email) {
-      console.log("❌ No email provided");
-      return res.status(400).json({ error: "Email is required." });
-    }
-
-    // Email validation
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) {
-      console.log("❌ Invalid email format:", email);
-      return res
-        .status(400)
-        .json({ error: "Please provide a valid email address." });
-    }
-
-    // Check if email service is configured
-    if (!transporter) {
-      console.error("❌ Email service not configured");
-      return res.status(200).json({
-        message:
-          "Password reset functionality is currently unavailable. Please contact support.",
-      });
-    }
-
-    // Search for user across all user collections
-    let userFound = null;
-    let userName = null;
-
-    try {
-      // Get all collections in the database
-      const collections = await mongoose.connection.db
-        .listCollections()
-        .toArray();
-      console.log("🔍 Searching across collections for email:", email);
-
-      for (const collection of collections) {
-        if (collection.name.endsWith("_users")) {
-          const collectionUserName = collection.name.replace("_users", "");
-          try {
-            const UserModel = createUserModel(collectionUserName);
-            const user = await UserModel.findOne({ email: email });
-            if (user) {
-              userFound = user;
-              userName = collectionUserName;
-              console.log("✅ User found in collection:", collectionUserName);
-              break;
-            }
-          } catch (collectionError) {
-            console.error(
-              `❌ Error searching in collection ${collectionUserName}:`,
-              collectionError.message
-            );
-            continue;
-          }
-        }
-      }
-    } catch (dbError) {
-      console.error("❌ Database search error:", dbError.message);
-      return res.status(500).json({ error: "Database error occurred." });
-    }
-
-    // Always return success to prevent email enumeration attacks
-    if (!userFound) {
-      console.log("❗ User not found for email:", email);
-      return res.status(200).json({
-        message:
-          "If an account with that email exists, a password reset link has been sent.",
-      });
-    }
-
-    try {
-      // Generate secure reset token
-      const resetToken = jwt.sign(
-        {
-          id: userFound._id,
-          email: userFound.email,
-          userName: userName,
-          purpose: "password_reset",
-        },
-        RESET_TOKEN_SECRET,
-        { expiresIn: "15m" } // Token expires in 15 minutes
-      );
-
-      // Create reset link (for now, just return success - you can configure the frontend URL later)
-      const resetLink = `${FRONTEND_URL}/reset-password?token=${resetToken}`;
-
-      // Email template
-      const emailHtml = `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2 style="color: #3498db;">Password Reset Request</h2>
-          <p>Hello ${userFound.firstName || "User"},</p>
-          <p>You have requested to reset your password for your Lights Finance account.</p>
-          <p>Click the button below to reset your password:</p>
-          <div style="text-align: center; margin: 30px 0;">
-            <a href="${resetLink}" 
-               style="background-color: #3498db; color: white; padding: 12px 30px; 
-                      text-decoration: none; border-radius: 5px; display: inline-block;">
-              Reset Password
-            </a>
-          </div>
-          <p><strong>This link will expire in 15 minutes.</strong></p>
-          <p>If you did not request this password reset, please ignore this email.</p>
-          <hr style="margin: 30px 0;">
-          <p style="color: #7f8c8d; font-size: 12px;">
-            Reset Link: ${resetLink}
-          </p>
-        </div>
-      `;
-
-      // Send email
-      await transporter.sendMail({
-        from: `"Lights Finance" <${EMAIL_USER}>`,
-        to: email,
-        subject: "Password Reset Request - Lights Finance",
-        html: emailHtml,
-      });
-
-      console.log("✅ Password reset email sent to:", email);
-    } catch (emailError) {
-      console.error("❌ Error sending email:", emailError.message);
-      // Still return success to prevent email enumeration
-    }
-
-    res.status(200).json({
-      message:
-        "If an account with that email exists, a password reset link has been sent.",
-    });
-  } catch (error) {
-    console.error("❌ Unexpected error in forgot password:", error);
-    res
-      .status(500)
-      .json({ error: "An unexpected error occurred. Please try again later." });
-  }
-});
-
-// 📌 **Reset Password Route**
-app.post("/api/reset-password", async (req, res) => {
-  const { token, newPassword } = req.body;
-
-  try {
-    console.log("🔐 Password reset attempt with token");
-
-    if (!token || !newPassword) {
-      return res
-        .status(400)
-        .json({ error: "Token and new password are required." });
-    }
-
-    if (newPassword.length < 6) {
-      return res
-        .status(400)
-        .json({ error: "Password must be at least 6 characters long." });
-    }
-
-    // Verify reset token
-    let decoded;
-    try {
-      decoded = jwt.verify(token, RESET_TOKEN_SECRET);
-    } catch (err) {
-      if (err.name === "TokenExpiredError") {
-        return res
-          .status(400)
-          .json({ error: "Reset link has expired. Please request a new one." });
-      }
-      return res.status(400).json({ error: "Invalid reset token." });
-    }
-
-    if (decoded.purpose !== "password_reset") {
-      return res.status(400).json({ error: "Invalid token purpose." });
-    }
-
-    // Find user
-    const UserModel = createUserModel(decoded.userName);
-    const user = await UserModel.findById(decoded.id);
-
-    if (!user) {
-      return res.status(404).json({ error: "User not found." });
-    }
-
-    // Hash new password
-    const saltRounds = 10;
-    const hashedPassword = await bcrypt.hash(newPassword, saltRounds);
-
-    // Update password
-    await UserModel.findByIdAndUpdate(decoded.id, {
-      password: hashedPassword,
-    });
-
-    console.log("✅ Password reset successful for user:", decoded.userName);
-    res.status(200).json({ message: "Password has been reset successfully." });
-  } catch (error) {
-    console.error("❌ Error in reset password:", error);
-    res.status(500).json({ error: "Internal Server Error" });
-  }
-});
-
-// 📌 **Verify Reset Token Route** (Optional - for frontend validation)
-app.post("/api/verify-reset-token", async (req, res) => {
-  const { token } = req.body;
-
-  try {
-    if (!token) {
-      return res.status(400).json({ error: "Token is required." });
-    }
-
-    // Verify token
-    const decoded = jwt.verify(token, RESET_TOKEN_SECRET);
-
-    if (decoded.purpose !== "password_reset") {
-      return res.status(400).json({ error: "Invalid token purpose." });
-    }
-
-    res.status(200).json({
-      message: "Token is valid.",
-      email: decoded.email,
-    });
-  } catch (err) {
-    if (err.name === "TokenExpiredError") {
-      return res.status(400).json({ error: "Reset link has expired." });
-    }
-    return res.status(400).json({ error: "Invalid token." });
   }
 });
 
@@ -1124,21 +878,6 @@ app.get("/test", async (req, res) => {
   });
 });
 
-// Debug endpoint to check goal schema
-app.get("/debug-goal-schema", async (req, res) => {
-  try {
-    const schema = Goal.schema.obj;
-    res.status(200).json({
-      message: "Goal schema info",
-      schema: schema,
-      descriptionRequired: schema.description?.required || false,
-      timestamp: new Date().toISOString(),
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
 // Get all goals for a user
 app.get("/goals/:username", async (req, res) => {
   const { username } = req.params;
@@ -1254,7 +993,7 @@ app.post("/goals/:username", async (req, res) => {
       userName: username,
       name: goalData.name,
       customName: goalData.customName || undefined, // Set to undefined if empty string or null
-      description: goalData.description || undefined, // Handle description field - optional
+      description: goalData.description || undefined, // Ensure description is included
       presentCost: parseFloat(goalData.presentCost),
       // Handle optional fields: if they exist, parse them, otherwise leave undefined/null
       childCurrentAge: goalData.childCurrentAge
@@ -1386,33 +1125,61 @@ app.get("/investments/:username/by-goal/:goalId", async (req, res) => {
 
 // 📌 **Investment Routes**
 
-// Add a new investment
+// --- FIX STARTS HERE ---
+// Add a new investment (REWRITTEN FOR CLARITY AND SECURITY)
 app.post("/investment", verifyToken, async (req, res) => {
   try {
-    console.log("💰 Creating investment for user:", req.user.id);
-    console.log("💰 Investment data:", req.body);
+    console.log("💰 Creating investment for user:", req.user.userName);
+    console.log("💰 Received Investment data:", req.body);
 
-    const investmentData = req.body;
-    // Add user ID from the token (convert to ObjectId)
-    investmentData.user = new mongoose.Types.ObjectId(req.user.id);
+    // Explicitly pull only the fields you expect from the body
+    const {
+      name,
+      amount,
+      interestRate,
+      investmentType,
+      maturityDate,
+      description,
+      goalId, // Explicitly get the goalId
+      compoundingFrequency,
+      monthlyDeposit,
+      duration,
+    } = req.body;
 
-    // Set currentAmount equal to initial amount for new investments
-    investmentData.currentAmount = investmentData.amount;
-
-    // IMPORTANT FIX: Provide a default name if it's a "Savings" type and no name is provided
-    if (investmentData.investmentType === "Savings" && !investmentData.name) {
-      investmentData.name = "General Savings"; // Or "Savings Account" + a timestamp, etc.
+    // Basic validation
+    if (!name || !amount || !interestRate || !investmentType) {
+      return res
+        .status(400)
+        .json({ error: "Missing required investment fields." });
     }
 
-    const newInvestment = new Investment(investmentData);
+    const newInvestment = new Investment({
+      name,
+      amount: parseFloat(amount),
+      currentAmount: parseFloat(amount), // currentAmount is same as initial amount
+      interestRate: parseFloat(interestRate),
+      investmentType,
+      startDate: new Date(),
+      maturityDate,
+      description,
+      goalId, // Pass the extracted goalId
+      compoundingFrequency,
+      monthlyDeposit,
+      duration,
+      userName: req.user.userName, // Add userName from the verified token
+    });
+
     await newInvestment.save();
     console.log("✅ Investment created successfully:", newInvestment._id);
-    res.json(newInvestment);
+
+    // Respond with 201 Created status and the new investment object
+    res.status(201).json(newInvestment);
   } catch (err) {
     console.error("❌ Error creating investment:", err);
     res.status(500).json({ error: err.message || "Failed to add investment" });
   }
 });
+// --- FIX ENDS HERE ---
 
 // 📌 Test endpoint to debug token and user issues
 app.get("/test-token", verifyToken, async (req, res) => {
@@ -1426,8 +1193,10 @@ app.get("/test-token", verifyToken, async (req, res) => {
     console.log("🧪 User found in DB:", user ? "Yes" : "No");
 
     // Check investments count
-    const userId = new mongoose.Types.ObjectId(req.user.id);
-    const investmentCount = await Investment.countDocuments({ user: userId });
+    const userName = req.user.userName; // Changed from userId = new mongoose.Types.ObjectId(req.user.id);
+    const investmentCount = await Investment.countDocuments({
+      userName: userName,
+    }); // Changed from user: userId
     console.log("🧪 Investment count for user:", investmentCount);
 
     res.json({
@@ -1435,8 +1204,7 @@ app.get("/test-token", verifyToken, async (req, res) => {
       user: req.user,
       userExistsInDB: !!user,
       investmentCount,
-      userIdType: typeof req.user.id,
-      userIdAsObjectId: userId.toString(),
+      // Removed userIdType and userIdAsObjectId as they are less relevant with userName filtering
     });
   } catch (err) {
     console.error("🧪 Test token error:", err);
@@ -1468,31 +1236,14 @@ app.get("/test-auth", verifyToken, (req, res) => {
   });
 });
 
-// 📌 Debug endpoint to check stored user info format
-app.get("/debug-login", async (req, res) => {
-  try {
-    res.json({
-      message: "Debug login endpoint",
-      jwtSecret: JWT_SECRET ? "Available" : "Missing",
-      jwtSecretSample: JWT_SECRET
-        ? JWT_SECRET.substring(0, 10) + "..."
-        : "None",
-      timestamp: new Date().toISOString(),
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
 // Get all investments
 app.get("/investments", verifyToken, async (req, res) => {
   try {
-    console.log("📊 Getting investments for user:", req.user.id);
+    console.log("📊 Getting investments for user:", req.user.userName); // Changed from req.user.id
     console.log("📊 User object:", req.user);
 
-    // Convert string ID to ObjectId if needed
-    const userId = new mongoose.Types.ObjectId(req.user.id);
-    const investments = await Investment.find({ user: userId });
+    const userName = req.user.userName; // Changed from userId = new mongoose.Types.ObjectId(req.user.id);
+    const investments = await Investment.find({ userName: userName }); // Changed from user: userId
     console.log("📊 Found investments:", investments.length);
 
     res.json(investments);
@@ -1505,11 +1256,11 @@ app.get("/investments", verifyToken, async (req, res) => {
 // Update investment
 app.put("/investment/:id", verifyToken, async (req, res) => {
   try {
-    const userId = new mongoose.Types.ObjectId(req.user.id);
+    const userName = req.user.userName; // Changed from userId = new mongoose.Types.ObjectId(req.user.id);
     const investment = await Investment.findOne({
       _id: req.params.id,
-      user: userId,
-    });
+      userName: userName,
+    }); // Changed from user: userId
 
     if (!investment) {
       return res
@@ -1531,11 +1282,11 @@ app.put("/investment/:id", verifyToken, async (req, res) => {
 // Delete investment
 app.delete("/investment/:id", verifyToken, async (req, res) => {
   try {
-    const userId = new mongoose.Types.ObjectId(req.user.id);
+    const userName = req.user.userName; // Changed from userId = new mongoose.Types.ObjectId(req.user.id);
     const investment = await Investment.findOne({
       _id: req.params.id,
-      user: userId,
-    });
+      userName: userName,
+    }); // Changed from user: userId
 
     if (!investment) {
       return res
