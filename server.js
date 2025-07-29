@@ -86,6 +86,7 @@ const goalSchema = new mongoose.Schema({
   userName: { type: String, required: true },
   name: { type: String, required: true },
   customName: { type: String },
+  description: { type: String, required: true },
   presentCost: { type: Number, required: true },
   childCurrentAge: { type: Number },
   goalAge: { type: Number },
