@@ -30,7 +30,7 @@ app.use(
 app.use(express.json());
 app.use(bodyParser.json());
 
-// � **Health Check Endpoint**
+// 📌 **Health Check Endpoint**
 app.get("/api/health", (req, res) => {
   res.json({
     status: "ok",
@@ -44,7 +44,7 @@ app.get("/api/health", (req, res) => {
   });
 });
 
-// �🔹 **MongoDB Connection**
+// � **MongoDB Connection**
 mongoose
   .connect(process.env.MONGO_URI)
   .then(async () => {
@@ -86,7 +86,7 @@ const goalSchema = new mongoose.Schema({
   userName: { type: String, required: true },
   name: { type: String, required: true },
   customName: { type: String },
-  description: { type: String, required: true },
+  description: { type: String, required: false },
   presentCost: { type: Number, required: true },
   childCurrentAge: { type: Number },
   goalAge: { type: Number },
@@ -176,66 +176,6 @@ const createUserModel = (userName) => {
   console.log(`✅ Creating new model for: ${collectionName}`);
   return mongoose.model(collectionName, UserSchema, collectionName);
 };
-
-app.post("/api/register", async (req, res) => {
-  console.log("✅ Register route hit!");
-  const {
-    firstName,
-    lastName,
-    userName,
-    email,
-    password,
-    age,
-    retirementAge,
-    phoneNumber,
-    country,
-  } = req.body;
-
-  try {
-    if (!userName || !email || !password) {
-      return res
-        .status(400)
-        .json({ error: "Username, email, and password are required." });
-    }
-
-    // Check if the username already exists in the database
-    const collections = await mongoose.connection.db
-      .listCollections()
-      .toArray();
-    const existingCollection = collections.some(
-      (col) => col.name === `${userName}`
-    );
-
-    if (existingCollection) {
-      return res.status(400).json({ error: "Username already taken!" });
-    }
-
-    // Create a hashed password
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    // Create User Model for the new user
-    const UserModel = createUserModel(userName);
-    const newUser = new UserModel({
-      firstName,
-      lastName,
-      userName,
-      email,
-      password: hashedPassword,
-      age,
-      retirementAge,
-      phoneNumber,
-      country,
-    });
-
-    // Save User in a new collection with username
-    await newUser.save();
-
-    res.status(201).json({ message: "User registered successfully!" });
-  } catch (error) {
-    console.error("Error during registration:", error);
-    res.status(500).json({ error: "Internal Server Error" });
-  }
-});
 
 app.post("/api/register", async (req, res) => {
   console.log("✅ Register route hit!");
