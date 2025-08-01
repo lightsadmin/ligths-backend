@@ -27,7 +27,7 @@ app.use(bodyParser.json());
 
 // 🔹 **MongoDB Connection**
 mongoose
-  .connect(process.env.MONGO_URI)
+  .connect(MONGO_URI)
   .then(async () => {
     console.log("✅ Connected to MongoDB Atlas");
     // Fix any problematic indexes in the Goal collection
@@ -1403,6 +1403,47 @@ app.get("/mutualfunds", async (req, res) => {
     const limit = parseInt(req.query.limit) || 20;
     const search = req.query.search || "";
 
+    // Check if MongoDB is connected
+    if (mongoose.connection.readyState !== 1) {
+      // Return mock data when MongoDB is not connected
+      const mockFunds = [
+        {
+          schemeCode: "120503",
+          schemeName:
+            "Aditya Birla Sun Life Frontline Equity Fund - Direct Plan - Growth",
+          nav: 587.23,
+          lastUpdated: new Date(),
+        },
+        {
+          schemeCode: "120504",
+          schemeName:
+            "Aditya Birla Sun Life Tax Relief 96 - Direct Plan - Growth",
+          nav: 156.45,
+          lastUpdated: new Date(),
+        },
+        {
+          schemeCode: "120505",
+          schemeName:
+            "Aditya Birla Sun Life Banking & Financial Services Fund - Direct Plan - Growth",
+          nav: 234.67,
+          lastUpdated: new Date(),
+        },
+      ];
+
+      const filtered = search
+        ? mockFunds.filter((fund) =>
+            fund.schemeName.toLowerCase().includes(search.toLowerCase())
+          )
+        : mockFunds;
+
+      return res.json({
+        funds: filtered.slice((page - 1) * limit, page * limit),
+        totalPages: Math.ceil(filtered.length / limit),
+        currentPage: page,
+        totalFunds: filtered.length,
+      });
+    }
+
     const query = search
       ? { schemeName: { $regex: search, $options: "i" } }
       : {};
@@ -1488,8 +1529,6 @@ app.get("/api/nav", async (req, res) => {
 // 🔹 **Start Server**
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 Server running on port ${PORT}`);
-  console.log(
-    `📱 Mobile devices can connect at: http://192.168.30.236:${PORT}`
-  );
+  console.log(`📱 Mobile devices can connect at: http://10.69.228.236:${PORT}`);
   console.log(`💻 Local access: http://localhost:${PORT}`);
 });
