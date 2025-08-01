@@ -1388,8 +1388,8 @@ const fetchAndStoreNAVData = async () => {
 };
 
 // 🔹 **Schedule Daily NAV Update**
-// Run every day at 6 PM (when AMFI typically updates NAV)
-cron.schedule("0 18 * * *", fetchAndStoreNAVData);
+// Run every day at 9:15 PM (when AMFI typically updates NAV)
+cron.schedule("15 21 * * *", fetchAndStoreNAVData);
 
 // Initial fetch on server start
 fetchAndStoreNAVData();
@@ -1446,6 +1446,42 @@ app.post("/update-nav", async (req, res) => {
     res.json({ message: "NAV data updated successfully" });
   } catch (error) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+// 🔹 **Additional API Routes for NAV (as requested)**
+// GET /api/nav - Alternative route for NAV data
+app.get("/api/nav", async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const search = req.query.search || "";
+
+    const query = search
+      ? { schemeName: { $regex: search, $options: "i" } }
+      : {};
+
+    const totalFunds = await MutualFund.countDocuments(query);
+    const funds = await MutualFund.find(query)
+      .sort({ schemeName: 1 })
+      .skip((page - 1) * limit)
+      .limit(limit);
+
+    res.json({
+      success: true,
+      data: funds,
+      pagination: {
+        totalFunds,
+        totalPages: Math.ceil(totalFunds / limit),
+        currentPage: page,
+        limit,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
   }
 });
 
