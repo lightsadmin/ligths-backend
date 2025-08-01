@@ -5,6 +5,8 @@ const cors = require("cors");
 const bodyParser = require("body-parser");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
+const axios = require("axios");
+const cron = require("node-cron");
 const ObjectId = mongoose.Types.ObjectId;
 
 const PORT = process.env.PORT || 5000;
@@ -90,6 +92,16 @@ const goalSchema = new mongoose.Schema({
 });
 
 const Goal = mongoose.model("Goal", goalSchema); // THEN the Goal model is created
+
+// 📌 Define Mutual Fund NAV Schema
+const mutualFundSchema = new mongoose.Schema({
+  schemeCode: { type: String, required: true, unique: true },
+  schemeName: { type: String, required: true },
+  nav: { type: Number, required: true },
+  lastUpdated: { type: Date, default: Date.now },
+});
+
+const MutualFund = mongoose.model("MutualFund", mutualFundSchema);
 
 // 🔹 **Fix Goal Collection Indexes**
 const fixGoalIndexes = async () => {
@@ -1147,7 +1159,13 @@ app.post("/investment", verifyToken, async (req, res) => {
     } = req.body;
 
     // Basic validation
-    if (!name || !amount || !interestRate || !investmentType) {
+    if (
+      !name ||
+      !amount ||
+      interestRate === undefined ||
+      interestRate === null ||
+      !investmentType
+    ) {
       return res
         .status(400)
         .json({ error: "Missing required investment fields." });
@@ -1308,6 +1326,126 @@ app.post("/calculate-interest", verifyToken, async (req, res) => {
     res.json({ message: "Interest calculation triggered successfully" });
   } catch (err) {
     res.status(500).json(err);
+  }
+});
+
+// 🔹 **Fetch NAV Data from AMFI**
+const fetchAndStoreNAVData = async () => {
+  try {
+    console.log("📈 Fetching NAV data from AMFI...");
+    const response = await axios.get(
+      "https://www.amfiindia.com/spages/NAVAll.txt"
+    );
+    const data = response.data;
+
+    // Parse the NAV data
+    const lines = data.split("\n");
+    let foundData = false;
+
+    for (const line of lines) {
+      if (line.trim() === "") continue;
+
+      // Skip header lines until we find actual data
+      if (
+        line.includes("Scheme Code") ||
+        line.includes("ISIN") ||
+        line.includes("Open Ended")
+      ) {
+        foundData = true;
+        continue;
+      }
+
+      if (!foundData) continue;
+
+      // Parse each line: SchemeCode;ISINDivPayoutISINGrowth;SchemeName;NetAssetValue;RepurchasePrice;SalePrice;Date
+      const parts = line.split(";");
+      if (parts.length >= 4) {
+        const schemeCode = parts[0].trim();
+        const schemeName = parts[2].trim();
+        const nav = parseFloat(parts[3].trim());
+
+        // Skip invalid entries
+        if (!schemeCode || !schemeName || isNaN(nav) || nav <= 0) continue;
+
+        // Update or create mutual fund entry
+        await MutualFund.findOneAndUpdate(
+          { schemeCode: schemeCode },
+          {
+            schemeCode: schemeCode,
+            schemeName: schemeName,
+            nav: nav,
+            lastUpdated: new Date(),
+          },
+          { upsert: true, new: true }
+        );
+      }
+    }
+
+    console.log("✅ NAV data updated successfully");
+  } catch (error) {
+    console.error("❌ Error fetching NAV data:", error.message);
+  }
+};
+
+// 🔹 **Schedule Daily NAV Update**
+// Run every day at 6 PM (when AMFI typically updates NAV)
+cron.schedule("0 18 * * *", fetchAndStoreNAVData);
+
+// Initial fetch on server start
+fetchAndStoreNAVData();
+
+// 🔹 **Mutual Fund API Endpoints**
+
+// Get all mutual funds with pagination
+app.get("/mutualfunds", async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const search = req.query.search || "";
+
+    const query = search
+      ? { schemeName: { $regex: search, $options: "i" } }
+      : {};
+
+    const totalFunds = await MutualFund.countDocuments(query);
+    const funds = await MutualFund.find(query)
+      .sort({ schemeName: 1 })
+      .skip((page - 1) * limit)
+      .limit(limit);
+
+    res.json({
+      funds,
+      totalPages: Math.ceil(totalFunds / limit),
+      currentPage: page,
+      totalFunds,
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get specific mutual fund by scheme code
+app.get("/mutualfunds/:schemeCode", async (req, res) => {
+  try {
+    const fund = await MutualFund.findOne({
+      schemeCode: req.params.schemeCode,
+    });
+    if (!fund) {
+      return res.status(404).json({ error: "Mutual fund not found" });
+    }
+    res.json(fund);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Manual NAV update trigger (for testing)
+app.post("/update-nav", async (req, res) => {
+  try {
+    await fetchAndStoreNAVData();
+    res.json({ message: "NAV data updated successfully" });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 });
 
