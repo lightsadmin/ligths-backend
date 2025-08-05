@@ -27,7 +27,7 @@ app.use(bodyParser.json());
 
 // 🔹 **MongoDB Connection**
 mongoose
-  .connect(MONGO_URI)
+  .connect(process.env.MONGO_URI)
   .then(async () => {
     console.log("✅ Connected to MongoDB Atlas");
     // Fix any problematic indexes in the Goal collection
@@ -93,14 +93,12 @@ const goalSchema = new mongoose.Schema({
 
 const Goal = mongoose.model("Goal", goalSchema); // THEN the Goal model is created
 
-// 📌 Define Mutual Fund NAV Schema
 const mutualFundSchema = new mongoose.Schema({
   schemeCode: { type: String, required: true, unique: true },
   schemeName: { type: String, required: true },
   nav: { type: Number, required: true },
   lastUpdated: { type: Date, default: Date.now },
 });
-
 const MutualFund = mongoose.model("MutualFund", mutualFundSchema);
 
 // 🔹 **Fix Goal Collection Indexes**
@@ -1329,121 +1327,124 @@ app.post("/calculate-interest", verifyToken, async (req, res) => {
   }
 });
 
-// 🔹 **Fetch NAV Data from AMFI**
+// --- NAV Fetching and Mutual Fund API ---
+
+/**
+ * Fetches NAV data from AMFI and updates the database efficiently.
+ * This function now uses bulkWrite for a massive performance improvement.
+ */
 const fetchAndStoreNAVData = async () => {
   try {
     console.log("📈 Fetching NAV data from AMFI...");
     const response = await axios.get(
       "https://www.amfiindia.com/spages/NAVAll.txt"
     );
-    const data = response.data;
-
-    // Parse the NAV data
-    const lines = data.split("\n");
-    let foundData = false;
+    const lines = response.data.split("\n");
+    const updates = [];
 
     for (const line of lines) {
-      if (line.trim() === "") continue;
-
-      // Skip header lines until we find actual data
-      if (
-        line.includes("Scheme Code") ||
-        line.includes("ISIN") ||
-        line.includes("Open Ended")
-      ) {
-        foundData = true;
-        continue;
-      }
-
-      if (!foundData) continue;
-
-      // Parse each line: SchemeCode;ISINDivPayoutISINGrowth;SchemeName;NetAssetValue;RepurchasePrice;SalePrice;Date
+      if (line.trim() === "" || line.includes("Scheme Code")) continue;
       const parts = line.split(";");
       if (parts.length >= 4) {
         const schemeCode = parts[0].trim();
         const schemeName = parts[2].trim();
         const nav = parseFloat(parts[3].trim());
 
-        // Skip invalid entries
-        if (!schemeCode || !schemeName || isNaN(nav) || nav <= 0) continue;
-
-        // Update or create mutual fund entry
-        await MutualFund.findOneAndUpdate(
-          { schemeCode: schemeCode },
-          {
-            schemeCode: schemeCode,
-            schemeName: schemeName,
-            nav: nav,
-            lastUpdated: new Date(),
-          },
-          { upsert: true, new: true }
-        );
+        if (schemeCode && schemeName && !isNaN(nav) && nav > 0) {
+          updates.push({
+            updateOne: {
+              filter: { schemeCode: schemeCode },
+              update: {
+                $set: { schemeCode, schemeName, nav, lastUpdated: new Date() },
+              },
+              upsert: true,
+            },
+          });
+        }
       }
     }
 
-    console.log("✅ NAV data updated successfully");
+    if (updates.length > 0) {
+      await MutualFund.bulkWrite(updates);
+      console.log(
+        `✅ NAV data updated successfully. Processed ${updates.length} funds.`
+      );
+    } else {
+      console.log("ℹ️ No new NAV data to update.");
+    }
   } catch (error) {
     console.error("❌ Error fetching NAV data:", error.message);
   }
 };
 
-// 🔹 **Schedule Daily NAV Update**
-// Run every day at 9:15 PM (when AMFI typically updates NAV)
-cron.schedule("15 21 * * *", fetchAndStoreNAVData);
-
+// Schedule daily NAV update at 9:15 PM India Time
+cron.schedule("15 21 * * *", fetchAndStoreNAVData, {
+  timezone: "Asia/Kolkata",
+});
 // Initial fetch on server start
 fetchAndStoreNAVData();
 
-// 🔹 **Mutual Fund API Endpoints**
+// --- Mutual Fund API Endpoints ---
 
-// Get all mutual funds with pagination
+/**
+ * NEW: Get all mutual funds grouped by company.
+ * Supports server-side search by company name.
+ */
+app.get("/mutualfunds/companies", async (req, res) => {
+  try {
+    const search = req.query.search || "";
+    const pipeline = [
+      {
+        $addFields: {
+          companyName: {
+            $trim: {
+              input: { $arrayElemAt: [{ $split: ["$schemeName", " - "] }, 0] },
+            },
+          },
+        },
+      },
+      { $match: { companyName: { $regex: search, $options: "i" } } },
+      {
+        $group: {
+          _id: "$companyName",
+          schemes: {
+            $push: {
+              schemeCode: "$schemeCode",
+              schemeName: "$schemeName",
+              nav: "$nav",
+              lastUpdated: "$lastUpdated",
+            },
+          },
+          lastUpdated: { $max: "$lastUpdated" },
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          companyName: "$_id",
+          schemes: "$schemes",
+          lastUpdated: "$lastUpdated",
+        },
+      },
+      { $sort: { companyName: 1 } },
+    ];
+    const companies = await MutualFund.aggregate(pipeline);
+    res.json(companies);
+  } catch (error) {
+    console.error("Error fetching grouped mutual funds:", error.message);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+/**
+ * Get a paginated list of all mutual funds.
+ * Supports server-side search by scheme name.
+ */
 app.get("/mutualfunds", async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 20;
     const search = req.query.search || "";
-
-    // Check if MongoDB is connected
-    if (mongoose.connection.readyState !== 1) {
-      // Return mock data when MongoDB is not connected
-      const mockFunds = [
-        {
-          schemeCode: "120503",
-          schemeName:
-            "Aditya Birla Sun Life Frontline Equity Fund - Direct Plan - Growth",
-          nav: 587.23,
-          lastUpdated: new Date(),
-        },
-        {
-          schemeCode: "120504",
-          schemeName:
-            "Aditya Birla Sun Life Tax Relief 96 - Direct Plan - Growth",
-          nav: 156.45,
-          lastUpdated: new Date(),
-        },
-        {
-          schemeCode: "120505",
-          schemeName:
-            "Aditya Birla Sun Life Banking & Financial Services Fund - Direct Plan - Growth",
-          nav: 234.67,
-          lastUpdated: new Date(),
-        },
-      ];
-
-      const filtered = search
-        ? mockFunds.filter((fund) =>
-            fund.schemeName.toLowerCase().includes(search.toLowerCase())
-          )
-        : mockFunds;
-
-      return res.json({
-        funds: filtered.slice((page - 1) * limit, page * limit),
-        totalPages: Math.ceil(filtered.length / limit),
-        currentPage: page,
-        totalFunds: filtered.length,
-      });
-    }
-
     const query = search
       ? { schemeName: { $regex: search, $options: "i" } }
       : {};
@@ -1465,7 +1466,9 @@ app.get("/mutualfunds", async (req, res) => {
   }
 });
 
-// Get specific mutual fund by scheme code
+/**
+ * Get details for a single mutual fund by its scheme code.
+ */
 app.get("/mutualfunds/:schemeCode", async (req, res) => {
   try {
     const fund = await MutualFund.findOne({
@@ -1480,7 +1483,9 @@ app.get("/mutualfunds/:schemeCode", async (req, res) => {
   }
 });
 
-// Manual NAV update trigger (for testing)
+/**
+ * Manually trigger the NAV update process.
+ */
 app.post("/update-nav", async (req, res) => {
   try {
     await fetchAndStoreNAVData();
@@ -1490,45 +1495,11 @@ app.post("/update-nav", async (req, res) => {
   }
 });
 
-// 🔹 **Additional API Routes for NAV (as requested)**
-// GET /api/nav - Alternative route for NAV data
-app.get("/api/nav", async (req, res) => {
-  try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 20;
-    const search = req.query.search || "";
-
-    const query = search
-      ? { schemeName: { $regex: search, $options: "i" } }
-      : {};
-
-    const totalFunds = await MutualFund.countDocuments(query);
-    const funds = await MutualFund.find(query)
-      .sort({ schemeName: 1 })
-      .skip((page - 1) * limit)
-      .limit(limit);
-
-    res.json({
-      success: true,
-      data: funds,
-      pagination: {
-        totalFunds,
-        totalPages: Math.ceil(totalFunds / limit),
-        currentPage: page,
-        limit,
-      },
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error.message,
-    });
-  }
-});
-
 // 🔹 **Start Server**
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`📱 Mobile devices can connect at: http://10.69.228.236:${PORT}`);
+  console.log(
+    `📱 Mobile devices can connect at: http://192.168.30.236:${PORT}`
+  );
   console.log(`💻 Local access: http://localhost:${PORT}`);
 });

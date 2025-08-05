@@ -11,7 +11,9 @@ const ObjectId = mongoose.Types.ObjectId;
 
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET || "mysecretkey";
-const MONGO_URI = process.env.MONGO_URI;
+const MONGO_URI =
+  process.env.MONGO_URI ||
+  "mongodb+srv://subikshapc:dVje83Q4uKgXM6RS@ligths.tncb6.mongodb.net/?retryWrites=true&w=majority&appName=Ligths";
 
 const app = express();
 app.use(
@@ -25,7 +27,7 @@ app.use(bodyParser.json());
 
 // 🔹 **MongoDB Connection**
 mongoose
-  .connect(process.env.MONGO_URI)
+  .connect(MONGO_URI)
   .then(async () => {
     console.log("✅ Connected to MongoDB Atlas");
     // Fix any problematic indexes in the Goal collection
@@ -96,7 +98,6 @@ const mutualFundSchema = new mongoose.Schema({
   schemeCode: { type: String, required: true, unique: true },
   schemeName: { type: String, required: true },
   nav: { type: Number, required: true },
-  navDate: { type: String }, // NAV date from AMFI
   lastUpdated: { type: Date, default: Date.now },
 });
 
@@ -1339,36 +1340,32 @@ const fetchAndStoreNAVData = async () => {
 
     // Parse the NAV data
     const lines = data.split("\n");
+    let foundData = false;
 
     for (const line of lines) {
       if (line.trim() === "") continue;
 
-      // Skip header and section divider lines
+      // Skip header lines until we find actual data
       if (
         line.includes("Scheme Code") ||
         line.includes("ISIN") ||
-        line.includes("Open Ended") ||
-        line.includes("Close Ended") ||
-        line.includes("Interval Fund") ||
-        !line.includes(";") ||
-        line.split(";").length < 6
+        line.includes("Open Ended")
       ) {
+        foundData = true;
         continue;
       }
 
-      // Parse each line: SchemeCode;ISINDivPayout/ISINGrowth;ISINDivReinvestment;SchemeName;NetAssetValue;Date
+      if (!foundData) continue;
+
+      // Parse each line: SchemeCode;ISINDivPayoutISINGrowth;SchemeName;NetAssetValue;RepurchasePrice;SalePrice;Date
       const parts = line.split(";");
-      if (parts.length >= 6) {
+      if (parts.length >= 4) {
         const schemeCode = parts[0].trim();
-        const schemeName = parts[3].trim();
-        const nav = parseFloat(parts[4].trim());
-        const date = parts[5].trim();
+        const schemeName = parts[2].trim();
+        const nav = parseFloat(parts[3].trim());
 
         // Skip invalid entries
         if (!schemeCode || !schemeName || isNaN(nav) || nav <= 0) continue;
-
-        // Clean the date field (remove carriage return)
-        const navDate = date.replace(/\r/g, "").trim();
 
         // Update or create mutual fund entry
         await MutualFund.findOneAndUpdate(
@@ -1377,7 +1374,6 @@ const fetchAndStoreNAVData = async () => {
             schemeCode: schemeCode,
             schemeName: schemeName,
             nav: nav,
-            navDate: navDate,
             lastUpdated: new Date(),
           },
           { upsert: true, new: true }
@@ -1531,25 +1527,8 @@ app.get("/api/nav", async (req, res) => {
 });
 
 // 🔹 **Start Server**
-const server = app.listen(PORT, "0.0.0.0", () => {
+app.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`🌍 Environment: ${process.env.NODE_ENV || "development"}`);
-
-  if (process.env.NODE_ENV === "production") {
-    console.log(`� Production URL: https://your-app-name.onrender.com`);
-  } else {
-    console.log(
-      `�📱 Mobile devices can connect at: http://10.69.228.236:${PORT}`
-    );
-    console.log(`💻 Local access: http://localhost:${PORT}`);
-  }
-});
-
-// Graceful shutdown
-process.on("SIGTERM", () => {
-  console.log("🛑 SIGTERM received, shutting down gracefully...");
-  server.close(() => {
-    console.log("💤 Process terminated");
-    mongoose.connection.close();
-  });
+  console.log(`📱 Mobile devices can connect at: http://10.69.228.236:${PORT}`);
+  console.log(`💻 Local access: http://localhost:${PORT}`);
 });
