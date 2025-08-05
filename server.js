@@ -7,8 +7,8 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken"); //n
 const axios = require("axios");
 const cron = require("node-cron");
-const nodemailer = require("nodemailer");
-const crypto = require("crypto");
+// const nodemailer = require("nodemailer"); // Removed - no longer needed
+// const crypto = require("crypto"); // Removed - no longer needed
 const ObjectId = mongoose.Types.ObjectId;
 
 const PORT = process.env.PORT || 5000;
@@ -16,80 +16,6 @@ const JWT_SECRET = process.env.JWT_SECRET || "mysecretkey";
 const MONGO_URI =
   process.env.MONGO_URI ||
   "mongodb+srv://subikshapc:<db_password>@ligths.tncb6.mongodb.net/?retryWrites=true&w=majority&appName=Ligths";
-
-// 📧 Email Configuration
-const EMAIL_CONFIG = {
-  service: process.env.EMAIL_SERVICE || "gmail",
-  user: process.env.EMAIL_USER || "your-email@gmail.com", // Add this to your .env file
-  pass: process.env.EMAIL_PASS || "your-app-password", // Add this to your .env file
-  from: process.env.EMAIL_FROM || "LightsON <noreply@lightson.com>",
-};
-
-// Create nodemailer transporter
-const createEmailTransporter = () => {
-  return nodemailer.createTransporter({
-    service: EMAIL_CONFIG.service,
-    auth: {
-      user: EMAIL_CONFIG.user,
-      pass: EMAIL_CONFIG.pass,
-    },
-  });
-};
-
-// 📧 **Email Utility Functions**
-const findUserByEmail = async (email) => {
-  const collections = await mongoose.connection.db.listCollections().toArray();
-
-  for (const collection of collections) {
-    const collectionName = collection.name;
-
-    // Skip system collections
-    if (collectionName.startsWith("system.")) continue;
-
-    try {
-      const UserModel = createUserModel(collectionName);
-      const user = await UserModel.findOne({ email });
-
-      if (user) {
-        return { user, userModel: UserModel };
-      }
-    } catch (err) {
-      // Skip collections that might not be user collections
-      continue;
-    }
-  }
-
-  return { user: null, userModel: null };
-};
-
-const findUserById = async (id) => {
-  if (!ObjectId.isValid(id)) {
-    return { user: null, userModel: null };
-  }
-
-  const collections = await mongoose.connection.db.listCollections().toArray();
-
-  for (const collection of collections) {
-    const collectionName = collection.name;
-
-    // Skip system collections
-    if (collectionName.startsWith("system.")) continue;
-
-    try {
-      const UserModel = createUserModel(collectionName);
-      const user = await UserModel.findById(id);
-
-      if (user) {
-        return { user, userModel: UserModel };
-      }
-    } catch (err) {
-      // Skip collections that might not be user collections
-      continue;
-    }
-  }
-
-  return { user: null, userModel: null };
-};
 
 const app = express();
 app.use(
@@ -222,10 +148,7 @@ const createUserModel = (userName) => {
     retirementAge: { type: Number, required: true },
     phoneNumber: { type: String, required: true },
     country: { type: String, required: true },
-    // 📧 Password Reset Fields
-    passwordResetToken: { type: String },
-    passwordResetExpires: { type: Date },
-    lastPasswordReset: { type: Date },
+    securityPin: { type: String, required: true }, // For forgot password functionality
     transactions: [
       {
         name: { type: String, required: true },
@@ -263,13 +186,14 @@ app.post("/api/register", async (req, res) => {
     retirementAge,
     phoneNumber,
     country,
+    securityPin,
   } = req.body;
 
   try {
-    if (!userName || !email || !password) {
-      return res
-        .status(400)
-        .json({ error: "Username, email, and password are required." });
+    if (!userName || !email || !password || !securityPin) {
+      return res.status(400).json({
+        error: "Username, email, password, and security PIN are required.",
+      });
     }
 
     // Check if the username already exists in the database
@@ -284,8 +208,9 @@ app.post("/api/register", async (req, res) => {
       return res.status(400).json({ error: "Username already taken!" });
     }
 
-    // Create a hashed password
+    // Create a hashed password and security PIN
     const hashedPassword = await bcrypt.hash(password, 10);
+    const hashedSecurityPin = await bcrypt.hash(securityPin, 10);
 
     // Create User Model for the new user
     const UserModel = createUserModel(userName);
@@ -299,66 +224,7 @@ app.post("/api/register", async (req, res) => {
       retirementAge,
       phoneNumber,
       country,
-    });
-
-    // Save User in a new collection with username
-    await newUser.save();
-
-    res.status(201).json({ message: "User registered successfully!" });
-  } catch (error) {
-    console.error("Error during registration:", error);
-    res.status(500).json({ error: "Internal Server Error" });
-  }
-});
-
-app.post("/api/register", async (req, res) => {
-  console.log("✅ Register route hit!");
-  const {
-    firstName,
-    lastName,
-    userName,
-    email,
-    password,
-    age,
-    retirementAge,
-    phoneNumber,
-    country,
-  } = req.body;
-
-  try {
-    if (!userName || !email || !password) {
-      return res
-        .status(400)
-        .json({ error: "Username, email, and password are required." });
-    }
-
-    // Check if the username already exists in the database
-    const collections = await mongoose.connection.db
-      .listCollections()
-      .toArray();
-    const existingCollection = collections.some(
-      (col) => col.name === `${userName}`
-    );
-
-    if (existingCollection) {
-      return res.status(400).json({ error: "Username already taken!" });
-    }
-
-    // Create a hashed password
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    // Create User Model for the new user
-    const UserModel = createUserModel(userName);
-    const newUser = new UserModel({
-      firstName,
-      lastName,
-      userName,
-      email,
-      password: hashedPassword,
-      age,
-      retirementAge,
-      phoneNumber,
-      country,
+      securityPin: hashedSecurityPin,
     });
 
     // Save User in a new collection with username
@@ -513,17 +379,54 @@ app.post("/api/login", async (req, res) => {
         .json({ error: "Username and password are required." });
     }
 
-    // Create UserModel for the given username
-    const UserModel = createUserModel(userName);
-    const user = await UserModel.findOne({ userName });
+    // Check if userName is actually an email address
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const isEmail = emailRegex.test(userName);
 
-    if (!user) {
+    let foundUser = null;
+    let UserModel = null;
+
+    if (isEmail) {
+      // If it's an email, search across all collections like in forgot password
+      console.log(`🔍 Login with email: ${userName}`);
+      const collections = await mongoose.connection.db
+        .listCollections()
+        .toArray();
+
+      for (const collection of collections) {
+        const collectionName = collection.name;
+        if (collectionName.startsWith("system.")) continue;
+
+        try {
+          const TempUserModel = createUserModel(collectionName);
+          const user = await TempUserModel.findOne({ email: userName });
+
+          if (user) {
+            foundUser = user;
+            UserModel = TempUserModel;
+            console.log(
+              `🔍 Found user by email: ${user.userName}, Email: ${user.email}`
+            );
+            break;
+          }
+        } catch (err) {
+          continue;
+        }
+      }
+    } else {
+      // If it's a username, use the original logic
+      console.log(`🔍 Login with username: ${userName}`);
+      UserModel = createUserModel(userName);
+      foundUser = await UserModel.findOne({ userName });
+    }
+
+    if (!foundUser) {
       console.log("❗ User not found!");
       return res.status(404).json({ error: "Invalid username or password." });
     }
 
     // ✅ Compare the provided password with the hashed password
-    const isMatch = await bcrypt.compare(password, user.password);
+    const isMatch = await bcrypt.compare(password, foundUser.password);
     if (!isMatch) {
       console.log("❗ Invalid password.");
       return res.status(401).json({ error: "Invalid username or password." });
@@ -531,8 +434,8 @@ app.post("/api/login", async (req, res) => {
 
     // ✅ Generate JWT Token
     const payload = {
-      id: user._id, // Keep user._id in payload for consistency if needed elsewhere, but use userName for investment lookup
-      userName: user.userName,
+      id: foundUser._id, // Keep user._id in payload for consistency if needed elsewhere, but use userName for investment lookup
+      userName: foundUser.userName,
     };
 
     console.log("🔐 JWT Payload:", payload);
@@ -546,14 +449,14 @@ app.post("/api/login", async (req, res) => {
       message: "Login successful!",
       token,
       user: {
-        firstName: user.firstName,
-        lastName: user.lastName,
-        username: user.userName,
-        email: user.email,
-        age: user.age,
-        retirementAge: user.retirementAge,
-        phoneNumber: user.phoneNumber,
-        country: user.country,
+        firstName: foundUser.firstName,
+        lastName: foundUser.lastName,
+        username: foundUser.userName,
+        email: foundUser.email,
+        age: foundUser.age,
+        retirementAge: foundUser.retirementAge,
+        phoneNumber: foundUser.phoneNumber,
+        country: foundUser.country,
       },
     });
   } catch (error) {
@@ -562,332 +465,124 @@ app.post("/api/login", async (req, res) => {
   }
 });
 
-// 📧 **Forgot Password Route**
+// � **Forgot Password Route (Security PIN based)**
 app.post("/api/forgot-password", async (req, res) => {
-  console.log("📧 Forgot password route hit!");
-  const { email } = req.body;
+  console.log("🔐 Forgot password route hit!");
+  const { email, securityPin, newPassword } = req.body;
 
   try {
     // Input validation
-    if (!email) {
-      return res.status(400).json({ error: "Email is required." });
-    }
-
-    // Basic email validation
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) {
-      return res
-        .status(400)
-        .json({ error: "Please enter a valid email address." });
-    }
-
-    // Find user by email across all user collections
-    const { user: foundUser, userModel } = await findUserByEmail(email);
-
-    // Always return success message to prevent user enumeration attacks
-    const successMessage =
-      "If an account with that email exists, a password reset link has been sent to your email address.";
-
-    if (!foundUser) {
-      console.log(
-        `📧 Password reset requested for non-existent email: ${email}`
-      );
-      return res.status(200).json({ message: successMessage });
-    }
-
-    // Generate secure random token
-    const resetToken = crypto.randomBytes(32).toString("hex");
-
-    // Hash the token before storing (extra security layer)
-    const hashedToken = await bcrypt.hash(resetToken, 10);
-
-    // Set token expiration (1 hour from now)
-    const tokenExpiration = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
-
-    // Update user with reset token and expiration
-    await userModel.findByIdAndUpdate(foundUser._id, {
-      passwordResetToken: hashedToken,
-      passwordResetExpires: tokenExpiration,
-    });
-
-    // Create password reset link
-    const resetLink = `${
-      process.env.FRONTEND_URL || "https://your-app.com"
-    }/reset-password?token=${resetToken}&id=${foundUser._id}`;
-
-    // Email content
-    const emailSubject = "Password Reset Request - LightsON";
-    const emailHtml = `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Password Reset - LightsON</title>
-        <style>
-          body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
-          .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-          .header { background: linear-gradient(135deg, #2563EB, #1E40AF); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
-          .content { background: #f8f9fa; padding: 30px; border-radius: 0 0 10px 10px; }
-          .button { display: inline-block; background: #2563EB; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; margin: 20px 0; }
-          .warning { background: #fff3cd; border: 1px solid #ffeaa7; padding: 15px; border-radius: 5px; margin: 20px 0; }
-          .footer { text-align: center; margin-top: 30px; font-size: 12px; color: #666; }
-        </style>
-      </head>
-      <body>
-        <div class="container">
-          <div class="header">
-            <h1>🔐 Password Reset Request</h1>
-            <p>LightsON - Personal Finance Management</p>
-          </div>
-          
-          <div class="content">
-            <p>Hello <strong>${foundUser.firstName} ${
-      foundUser.lastName
-    }</strong>,</p>
-            
-            <p>We received a request to reset the password for your LightsON account associated with <strong>${email}</strong>.</p>
-            
-            <p>To reset your password, click the button below:</p>
-            
-            <div style="text-align: center;">
-              <a href="${resetLink}" class="button">Reset My Password</a>
-            </div>
-            
-            <p>Or copy and paste this link into your browser:</p>
-            <p style="word-break: break-all; background: #e9ecef; padding: 10px; border-radius: 5px;">${resetLink}</p>
-            
-            <div class="warning">
-              <strong>⚠️ Important Security Information:</strong>
-              <ul>
-                <li>This link will expire in <strong>1 hour</strong></li>
-                <li>If you didn't request this password reset, please ignore this email</li>
-                <li>Never share this link with anyone</li>
-                <li>Our team will never ask for your password via email</li>
-              </ul>
-            </div>
-            
-            <p>If you're having trouble with the button above, you can also reset your password by visiting the forgot password page in the LightsON app and entering this verification code:</p>
-            <p style="font-family: monospace; font-size: 18px; font-weight: bold; text-align: center; background: #e9ecef; padding: 15px; border-radius: 5px;">${resetToken
-              .substring(0, 8)
-              .toUpperCase()}</p>
-          </div>
-          
-          <div class="footer">
-            <p>This email was sent by LightsON Personal Finance Management System</p>
-            <p>If you have any questions, please contact our support team</p>
-          </div>
-        </div>
-      </body>
-      </html>
-    `;
-
-    const emailText = `
-      Password Reset Request - LightsON
-      
-      Hello ${foundUser.firstName} ${foundUser.lastName},
-      
-      We received a request to reset the password for your LightsON account.
-      
-      To reset your password, click or copy this link:
-      ${resetLink}
-      
-      This link will expire in 1 hour.
-      
-      If you didn't request this password reset, please ignore this email.
-      
-      Best regards,
-      LightsON Team
-    `;
-
-    // Send email
-    try {
-      const transporter = createEmailTransporter();
-
-      await transporter.sendMail({
-        from: EMAIL_CONFIG.from,
-        to: email,
-        subject: emailSubject,
-        text: emailText,
-        html: emailHtml,
+    if (!email || !securityPin || !newPassword) {
+      return res.status(400).json({
+        error: "Email, security PIN, and new password are required.",
       });
-
-      console.log(`✅ Password reset email sent successfully to: ${email}`);
-    } catch (emailError) {
-      console.error("❌ Error sending password reset email:", emailError);
-
-      // Clean up the reset token if email fails
-      await userModel.findByIdAndUpdate(foundUser._id, {
-        $unset: {
-          passwordResetToken: 1,
-          passwordResetExpires: 1,
-        },
-      });
-
-      return res.status(500).json({
-        error: "Failed to send password reset email. Please try again later.",
-      });
-    }
-
-    res.status(200).json({ message: successMessage });
-  } catch (error) {
-    console.error("❌ Error in forgot password:", error);
-    res.status(500).json({ error: "Internal Server Error" });
-  }
-});
-
-// 📧 **Reset Password Route**
-app.post("/api/reset-password", async (req, res) => {
-  console.log("🔐 Reset password route hit!");
-  const { token, id, newPassword } = req.body;
-
-  try {
-    // Input validation
-    if (!token || !id || !newPassword) {
-      return res
-        .status(400)
-        .json({ error: "Token, user ID, and new password are required." });
-    }
-
-    // Validate ObjectId format
-    if (!ObjectId.isValid(id)) {
-      return res.status(400).json({ error: "Invalid user ID format." });
     }
 
     // Password strength validation
-    if (newPassword.length < 8) {
-      return res
-        .status(400)
-        .json({ error: "Password must be at least 8 characters long." });
+    if (newPassword.length < 6) {
+      return res.status(400).json({
+        error: "New password must be at least 6 characters long.",
+      });
     }
 
-    // Find user by ID across all collections
-    const { user: foundUser, userModel } = await findUserById(id);
+    // Find user by email - email should be unique per user
+    let foundUser = null;
+    let userModel = null;
+
+    const collections = await mongoose.connection.db
+      .listCollections()
+      .toArray();
+
+    for (const collection of collections) {
+      const collectionName = collection.name;
+
+      // Skip system collections
+      if (collectionName.startsWith("system.")) continue;
+
+      try {
+        const UserModel = createUserModel(collectionName);
+        const user = await UserModel.findOne({ email: email });
+
+        if (user) {
+          foundUser = user;
+          userModel = UserModel;
+          console.log(
+            `🔍 Found user: ${user.userName}, Email: ${
+              user.email
+            }, Has SecurityPin: ${!!user.securityPin}, SecurityPin Value: "${
+              user.securityPin
+            }", SecurityPin Type: ${typeof user.securityPin}`
+          );
+          break; // Email is unique, so we can break after finding the user
+        }
+      } catch (err) {
+        // Skip collections that might not be user collections
+        continue;
+      }
+    }
 
     if (!foundUser) {
-      return res.status(400).json({ error: "Invalid or expired reset token." });
+      console.log(`❌ No user found with email: ${email}`);
+      return res
+        .status(404)
+        .json({ error: "No account found with this email address." });
     }
 
-    // Check if reset token exists and hasn't expired
-    if (!foundUser.passwordResetToken || !foundUser.passwordResetExpires) {
-      return res.status(400).json({ error: "Invalid or expired reset token." });
-    }
+    // Check if user has a security PIN set
+    if (!foundUser.securityPin) {
+      console.log(
+        `⚠️ User ${foundUser.userName} (${email}) exists but has no security PIN. Updating with provided PIN...`
+      );
 
-    // Check if token has expired
-    if (new Date() > foundUser.passwordResetExpires) {
-      // Clean up expired token
+      // Hash the provided security PIN and save it to the user
+      const hashedSecurityPin = await bcrypt.hash(securityPin, 10);
+
+      // Update user with security PIN
       await userModel.findByIdAndUpdate(foundUser._id, {
-        $unset: {
-          passwordResetToken: 1,
-          passwordResetExpires: 1,
-        },
+        securityPin: hashedSecurityPin,
       });
 
-      return res
-        .status(400)
-        .json({
-          error:
-            "Reset token has expired. Please request a new password reset.",
-        });
+      console.log(
+        `✅ Security PIN added for user: ${foundUser.userName} (${foundUser.email})`
+      );
+
+      // Continue with password reset process
+      foundUser.securityPin = hashedSecurityPin; // Update local object
     }
 
-    // Verify the token
-    const isTokenValid = await bcrypt.compare(
-      token,
-      foundUser.passwordResetToken
+    console.log(
+      `✅ User ${foundUser.userName} found with security PIN. Proceeding with verification...`
     );
-    if (!isTokenValid) {
-      return res.status(400).json({ error: "Invalid or expired reset token." });
+
+    // Verify security PIN
+    const isPinValid = await bcrypt.compare(securityPin, foundUser.securityPin);
+    if (!isPinValid) {
+      return res.status(401).json({ error: "Invalid security PIN." });
     }
 
     // Hash the new password
     const hashedNewPassword = await bcrypt.hash(newPassword, 10);
 
-    // Update user with new password and clear reset token
+    // Update user password
     await userModel.findByIdAndUpdate(foundUser._id, {
       password: hashedNewPassword,
-      lastPasswordReset: new Date(),
-      $unset: {
-        passwordResetToken: 1,
-        passwordResetExpires: 1,
-      },
     });
 
-    console.log(`✅ Password reset successful for user: ${foundUser.userName}`);
-
-    // Send confirmation email (optional but recommended)
-    try {
-      const transporter = createEmailTransporter();
-
-      const confirmationEmailHtml = `
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <meta charset="utf-8">
-          <title>Password Reset Successful - LightsON</title>
-          <style>
-            body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
-            .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-            .header { background: linear-gradient(135deg, #059669, #047857); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
-            .content { background: #f8f9fa; padding: 30px; border-radius: 0 0 10px 10px; }
-            .success { background: #d1edf7; border: 1px solid #b8daff; padding: 15px; border-radius: 5px; margin: 20px 0; }
-          </style>
-        </head>
-        <body>
-          <div class="container">
-            <div class="header">
-              <h1>✅ Password Reset Successful</h1>
-              <p>LightsON - Personal Finance Management</p>
-            </div>
-            
-            <div class="content">
-              <p>Hello <strong>${foundUser.firstName} ${
-        foundUser.lastName
-      }</strong>,</p>
-              
-              <div class="success">
-                <strong>🎉 Your password has been successfully reset!</strong>
-              </div>
-              
-              <p>Your LightsON account password was changed on <strong>${new Date().toLocaleString()}</strong>.</p>
-              
-              <p>You can now log in to your account using your new password.</p>
-              
-              <p><strong>Security Note:</strong> If you did not make this change, please contact our support team immediately.</p>
-              
-              <p>Thank you for using LightsON!</p>
-            </div>
-          </div>
-        </body>
-        </html>
-      `;
-
-      await transporter.sendMail({
-        from: EMAIL_CONFIG.from,
-        to: foundUser.email,
-        subject: "Password Reset Successful - LightsON",
-        html: confirmationEmailHtml,
-      });
-
-      console.log(
-        `✅ Password reset confirmation email sent to: ${foundUser.email}`
-      );
-    } catch (emailError) {
-      console.error("⚠️ Failed to send confirmation email:", emailError);
-      // Don't fail the request if confirmation email fails
-    }
+    console.log(
+      `✅ Password reset successful for user: ${foundUser.userName} (${foundUser.email})`
+    );
 
     res.status(200).json({
       message:
         "Password reset successful! You can now log in with your new password.",
     });
   } catch (error) {
-    console.error("❌ Error in reset password:", error);
+    console.error("❌ Error in forgot password:", error);
     res.status(500).json({ error: "Internal Server Error" });
   }
 });
 
-// 📧 **Google Authentication Route**
+// �📧 **Google Authentication Route**
 app.post("/api/google-auth", async (req, res) => {
   console.log("🔐 Google auth route hit!");
   const { googleId, email, name, picture } = req.body;
@@ -899,8 +594,33 @@ app.post("/api/google-auth", async (req, res) => {
         .json({ error: "Missing required Google authentication data." });
     }
 
-    // Check if user exists by email
-    const { user: foundUser, userModel } = await findUserByEmail(email);
+    // Check if user exists by email across all collections
+    const collections = await mongoose.connection.db
+      .listCollections()
+      .toArray();
+    let foundUser = null;
+    let userModel = null;
+
+    for (const collection of collections) {
+      const collectionName = collection.name;
+
+      // Skip system collections
+      if (collectionName.startsWith("system.")) continue;
+
+      try {
+        const UserModel = createUserModel(collectionName);
+        const user = await UserModel.findOne({ email });
+
+        if (user) {
+          foundUser = user;
+          userModel = UserModel;
+          break;
+        }
+      } catch (err) {
+        // Skip collections that might not be user collections
+        continue;
+      }
+    }
 
     if (foundUser) {
       // User exists, log them in
@@ -1004,82 +724,6 @@ app.post("/api/google-auth", async (req, res) => {
   } catch (error) {
     console.error("❌ Error in Google authentication:", error);
     res.status(500).json({ error: "Internal Server Error" });
-  }
-});
-
-// 📧 **Test Email Configuration Route** (for development/admin use)
-app.post("/api/test-email", async (req, res) => {
-  console.log("📧 Test email route hit!");
-  const { email } = req.body;
-
-  try {
-    if (!email) {
-      return res.status(400).json({ error: "Email is required for testing." });
-    }
-
-    const transporter = createEmailTransporter();
-
-    // Test email content
-    const testEmailHtml = `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <meta charset="utf-8">
-        <title>Email Configuration Test - LightsON</title>
-        <style>
-          body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
-          .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-          .header { background: linear-gradient(135deg, #2563EB, #1E40AF); color: white; padding: 30px; text-align: center; border-radius: 10px; }
-          .content { background: #f8f9fa; padding: 30px; margin-top: 20px; border-radius: 10px; }
-        </style>
-      </head>
-      <body>
-        <div class="container">
-          <div class="header">
-            <h1>🧪 Email Test Successful!</h1>
-            <p>LightsON - Email Configuration Test</p>
-          </div>
-          
-          <div class="content">
-            <p><strong>Congratulations!</strong></p>
-            <p>Your email configuration is working correctly.</p>
-            <p><strong>Test Details:</strong></p>
-            <ul>
-              <li>Service: ${EMAIL_CONFIG.service}</li>
-              <li>From: ${EMAIL_CONFIG.from}</li>
-              <li>Timestamp: ${new Date().toLocaleString()}</li>
-            </ul>
-            <p>You can now safely use the forgot password functionality.</p>
-          </div>
-        </div>
-      </body>
-      </html>
-    `;
-
-    await transporter.sendMail({
-      from: EMAIL_CONFIG.from,
-      to: email,
-      subject: "Email Configuration Test - LightsON",
-      html: testEmailHtml,
-    });
-
-    console.log(`✅ Test email sent successfully to: ${email}`);
-    res.status(200).json({
-      message: "Test email sent successfully!",
-      details: {
-        service: EMAIL_CONFIG.service,
-        from: EMAIL_CONFIG.from,
-        to: email,
-        timestamp: new Date().toISOString(),
-      },
-    });
-  } catch (error) {
-    console.error("❌ Error sending test email:", error);
-    res.status(500).json({
-      error:
-        "Failed to send test email. Please check your email configuration.",
-      details: error.message,
-    });
   }
 });
 
@@ -1194,6 +838,88 @@ app.post("/api/check-email", async (req, res) => {
     res.json({ exists: emailExists });
   } catch (error) {
     console.error("Error checking email:", error);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+// 📌 **Add Security PIN to Existing User (Temporary Migration Endpoint)**
+app.post("/api/add-security-pin", async (req, res) => {
+  console.log("🔐 Add security PIN route hit!");
+  const { email, securityPin } = req.body;
+
+  try {
+    // Input validation
+    if (!email || !securityPin) {
+      return res.status(400).json({
+        error: "Email and security PIN are required.",
+      });
+    }
+
+    // Find user by email across all collections
+    let foundUser = null;
+    let userModel = null;
+
+    const collections = await mongoose.connection.db
+      .listCollections()
+      .toArray();
+
+    for (const collection of collections) {
+      const collectionName = collection.name;
+
+      // Skip system collections
+      if (collectionName.startsWith("system.")) continue;
+
+      try {
+        const UserModel = createUserModel(collectionName);
+        const user = await UserModel.findOne({ email: email });
+
+        if (user) {
+          foundUser = user;
+          userModel = UserModel;
+          console.log(`🔍 Found user: ${user.userName}, Email: ${user.email}`);
+          break;
+        }
+      } catch (err) {
+        // Skip collections that might not be user collections
+        continue;
+      }
+    }
+
+    if (!foundUser) {
+      console.log(`❌ No user found with email: ${email}`);
+      return res
+        .status(404)
+        .json({ error: "No account found with this email address." });
+    }
+
+    // Check if user already has a security PIN
+    if (foundUser.securityPin) {
+      console.log(
+        `⚠️ User ${foundUser.userName} (${email}) already has a security PIN`
+      );
+      return res.status(400).json({
+        error: "This account already has a security PIN set.",
+      });
+    }
+
+    // Hash the security PIN
+    const hashedSecurityPin = await bcrypt.hash(securityPin, 10);
+
+    // Update user with security PIN
+    await userModel.findByIdAndUpdate(foundUser._id, {
+      securityPin: hashedSecurityPin,
+    });
+
+    console.log(
+      `✅ Security PIN added successfully for user: ${foundUser.userName} (${foundUser.email})`
+    );
+
+    res.status(200).json({
+      message:
+        "Security PIN added successfully! You can now use the forgot password feature.",
+    });
+  } catch (error) {
+    console.error("❌ Error adding security PIN:", error);
     res.status(500).json({ error: "Internal Server Error" });
   }
 });
