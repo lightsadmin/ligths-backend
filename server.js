@@ -2318,6 +2318,65 @@ app.delete("/api/stock-transactions/:transactionId", async (req, res) => {
   }
 });
 
+/**
+ * Get all stock companies from Finnhub API
+ */
+app.get("/api/stock-companies", async (req, res) => {
+  try {
+    const { search } = req.query;
+
+    // Fetch US stock symbols from Finnhub
+    const response = await fetch(
+      `https://finnhub.io/api/v1/stock/symbol?exchange=US&token=${process.env.FINNHUB_API_KEY}`
+    );
+
+    if (!response.ok) {
+      throw new Error(`Finnhub API error: ${response.status}`);
+    }
+
+    let companies = await response.json();
+
+    // Filter out companies with invalid symbols or names
+    companies = companies.filter(
+      (company) =>
+        company.symbol &&
+        company.description &&
+        !company.symbol.includes(".") &&
+        company.symbol.length <= 5
+    );
+
+    // If search query is provided, filter companies
+    if (search && search.trim()) {
+      const searchTerm = search.trim().toLowerCase();
+      companies = companies.filter(
+        (company) =>
+          company.symbol.toLowerCase().includes(searchTerm) ||
+          company.description.toLowerCase().includes(searchTerm)
+      );
+    }
+
+    // Limit to reasonable number and format response
+    companies = companies.slice(0, 1000).map((company) => ({
+      symbol: company.symbol,
+      name: company.description,
+      displayName: company.displaySymbol || company.symbol,
+      type: company.type || "Common Stock",
+    }));
+
+    res.json({
+      companies,
+      total: companies.length,
+      search: search || "",
+    });
+  } catch (error) {
+    console.error("Error fetching stock companies:", error);
+    res.status(500).json({
+      error: "Failed to fetch stock companies",
+      message: error.message,
+    });
+  }
+});
+
 // 🔹 **Start Server**
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 Server running on port ${PORT}`);
