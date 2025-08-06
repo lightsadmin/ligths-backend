@@ -55,7 +55,7 @@ const investmentSchema = new mongoose.Schema({
   amount: { type: Number, required: true }, // Initial investment amount
   currentAmount: { type: Number, required: true }, // Current value with interest
   interestRate: { type: Number, required: true }, // Annual interest rate (%)
-  investmentType: { type: String, required: true }, // e.g., "Fixed Deposit", "Mutual Fund", etc.
+  investmentType: { type: String, required: true }, // e.g., "Fixed Deposit", "Mutual Fund", "Stock", etc.
   startDate: { type: Date, default: Date.now },
   maturityDate: { type: Date },
   lastInterestUpdate: { type: Date, default: Date.now },
@@ -64,6 +64,10 @@ const investmentSchema = new mongoose.Schema({
   monthlyDeposit: { type: Number }, // Specific for Recurring Deposit
   duration: { type: Number }, // Specific for Recurring Deposit
   goalId: { type: String }, // Add goalId field
+  // Stock-specific fields
+  stockSymbol: { type: String }, // e.g., "AAPL", "MSFT"
+  stockQuantity: { type: Number }, // Number of shares (can be negative for sells)
+  stockPrice: { type: Number }, // Price per share when bought/sold
 });
 
 const Investment = mongoose.model("Investment", investmentSchema);
@@ -1919,6 +1923,171 @@ app.get("/mutualfunds/:schemeCode", async (req, res) => {
   }
 });
 
+// --- Stock Companies API Endpoints ---
+
+/**
+ * Get all stock companies with search functionality
+ * Fetches from Finnhub API and provides pagination and search
+ */
+app.get("/api/stock-companies", async (req, res) => {
+  try {
+    const { search = "", page = 1, limit = 50, exchange = "US" } = req.query;
+
+    // Finnhub API key - you can move this to environment variables
+    const FINNHUB_API_KEY = "d28seapr01qle9gsj64gd28seapr01qle9gsj650";
+
+    // Fetch stock symbols from Finnhub
+    const response = await axios.get(`https://finnhub.io/api/v1/stock/symbol`, {
+      params: {
+        exchange: exchange,
+        token: FINNHUB_API_KEY,
+      },
+    });
+
+    let companies = response.data || [];
+
+    // Filter by search term if provided
+    if (search.trim()) {
+      const searchTerm = search.toLowerCase().trim();
+      companies = companies.filter(
+        (company) =>
+          company.symbol?.toLowerCase().includes(searchTerm) ||
+          company.description?.toLowerCase().includes(searchTerm)
+      );
+    }
+
+    // Pagination
+    const startIndex = (page - 1) * limit;
+    const endIndex = startIndex + parseInt(limit);
+    const paginatedCompanies = companies.slice(startIndex, endIndex);
+
+    res.json({
+      companies: paginatedCompanies,
+      totalCompanies: companies.length,
+      currentPage: parseInt(page),
+      totalPages: Math.ceil(companies.length / limit),
+      hasNext: endIndex < companies.length,
+      hasPrev: page > 1,
+    });
+  } catch (error) {
+    console.error("Error fetching stock companies:", error);
+    res.status(500).json({
+      error: "Failed to fetch stock companies",
+      message: error.message,
+    });
+  }
+});
+
+/**
+ * Get stock quote for a specific symbol
+ */
+app.get("/api/stock-quote/:symbol", async (req, res) => {
+  try {
+    const { symbol } = req.params;
+    const FINNHUB_API_KEY = "d28seapr01qle9gsj64gd28seapr01qle9gsj650";
+
+    // Fetch quote and profile simultaneously
+    const [quoteResponse, profileResponse] = await Promise.all([
+      axios.get(`https://finnhub.io/api/v1/quote`, {
+        params: { symbol, token: FINNHUB_API_KEY },
+      }),
+      axios.get(`https://finnhub.io/api/v1/stock/profile2`, {
+        params: { symbol, token: FINNHUB_API_KEY },
+      }),
+    ]);
+
+    const quote = quoteResponse.data;
+    const profile = profileResponse.data;
+
+    // Calculate percentage change
+    const percentChange = quote.pc
+      ? (((quote.c - quote.pc) / quote.pc) * 100).toFixed(2)
+      : 0;
+
+    res.json({
+      symbol,
+      quote,
+      profile,
+      percentChange,
+      formatted: {
+        currentPrice: new Intl.NumberFormat("en-US", {
+          style: "currency",
+          currency: "USD",
+        }).format(quote.c || 0),
+        change: `${percentChange >= 0 ? "+" : ""}${percentChange}%`,
+      },
+    });
+  } catch (error) {
+    console.error(
+      `Error fetching stock quote for ${req.params.symbol}:`,
+      error
+    );
+    res.status(500).json({
+      error: "Failed to fetch stock quote",
+      message: error.message,
+    });
+  }
+});
+
+/**
+ * Get multiple stock quotes at once
+ */
+app.post("/api/stock-quotes", async (req, res) => {
+  try {
+    const { symbols } = req.body;
+
+    if (!symbols || !Array.isArray(symbols)) {
+      return res.status(400).json({ error: "Symbols array is required" });
+    }
+
+    const FINNHUB_API_KEY = "d28seapr01qle9gsj64gd28seapr01qle9gsj650";
+
+    const promises = symbols.map(async (symbol) => {
+      try {
+        const [quoteResponse, profileResponse] = await Promise.all([
+          axios.get(`https://finnhub.io/api/v1/quote`, {
+            params: { symbol, token: FINNHUB_API_KEY },
+          }),
+          axios.get(`https://finnhub.io/api/v1/stock/profile2`, {
+            params: { symbol, token: FINNHUB_API_KEY },
+          }),
+        ]);
+
+        const quote = quoteResponse.data;
+        const profile = profileResponse.data;
+        const percentChange = quote.pc
+          ? (((quote.c - quote.pc) / quote.pc) * 100).toFixed(2)
+          : 0;
+
+        return {
+          symbol,
+          quote,
+          profile,
+          percentChange,
+          error: null,
+        };
+      } catch (error) {
+        return {
+          symbol,
+          quote: null,
+          profile: null,
+          percentChange: 0,
+          error: error.message,
+        };
+      }
+    });
+
+    const results = await Promise.all(promises);
+    res.json({ data: results });
+  } catch (error) {
+    console.error("Error fetching multiple stock quotes:", error);
+    res.status(500).json({
+      error: "Failed to fetch stock quotes",
+      message: error.message,
+    });
+  }
+});
+
 // --- Stock Transaction API Endpoints ---
 
 /**
@@ -2060,6 +2229,66 @@ app.get("/api/stock-portfolio/:userName", async (req, res) => {
     res.json({ portfolio });
   } catch (error) {
     console.error("Error fetching stock portfolio:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Get user's stock investments (from investments collection)
+ */
+app.get("/api/stock-investments/:userName", verifyToken, async (req, res) => {
+  try {
+    const userName = req.user.userName;
+
+    // Get all stock investments for the user
+    const stockInvestments = await Investment.find({
+      userName: userName,
+      investmentType: "Stock",
+    }).sort({ startDate: -1 });
+
+    // Group by stock symbol to get portfolio summary
+    const portfolioMap = {};
+
+    stockInvestments.forEach((investment) => {
+      const symbol = investment.stockSymbol;
+      if (!portfolioMap[symbol]) {
+        portfolioMap[symbol] = {
+          symbol,
+          companyName: investment.name.split(" - ")[0],
+          totalShares: 0,
+          totalInvested: 0,
+          transactions: [],
+        };
+      }
+
+      portfolioMap[symbol].totalShares += investment.stockQuantity;
+      portfolioMap[symbol].totalInvested += investment.amount;
+      portfolioMap[symbol].transactions.push({
+        type: investment.stockQuantity > 0 ? "buy" : "sell",
+        quantity: Math.abs(investment.stockQuantity),
+        price: investment.stockPrice,
+        amount: investment.amount,
+        date: investment.startDate,
+        description: investment.description,
+      });
+    });
+
+    // Convert to array and filter out zero holdings
+    const portfolio = Object.values(portfolioMap).filter(
+      (item) => item.totalShares > 0
+    );
+
+    res.json({
+      stockInvestments,
+      portfolio,
+      totalStocks: portfolio.length,
+      totalInvested: portfolio.reduce(
+        (sum, item) => sum + item.totalInvested,
+        0
+      ),
+    });
+  } catch (error) {
+    console.error("Error fetching stock investments:", error);
     res.status(500).json({ error: error.message });
   }
 });
