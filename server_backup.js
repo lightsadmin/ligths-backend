@@ -116,10 +116,7 @@ const stockTransactionSchema = new mongoose.Schema({
   timestamp: { type: Date, default: Date.now },
 });
 
-const StockTransaction = mongoose.model(
-  "StockTransaction",
-  stockTransactionSchema
-);
+const StockTransaction = mongoose.model("StockTransaction", stockTransactionSchema);
 
 // �🔹 **Fix Goal Collection Indexes**
 const fixGoalIndexes = async () => {
@@ -1478,6 +1475,70 @@ app.get("/investments/:username/by-goal/:goalId", async (req, res) => {
   }
 });
 
+// 📌 **Investment Routes**
+
+// --- FIX STARTS HERE ---
+// Add a new investment (REWRITTEN FOR CLARITY AND SECURITY)
+app.post("/investment", verifyToken, async (req, res) => {
+  try {
+    console.log("💰 Creating investment for user:", req.user.userName);
+    console.log("💰 Received Investment data:", req.body);
+
+    // Explicitly pull only the fields you expect from the body
+    const {
+      name,
+      amount,
+      interestRate,
+      investmentType,
+      maturityDate,
+      description,
+      goalId, // Explicitly get the goalId
+      compoundingFrequency,
+      monthlyDeposit,
+      duration,
+    } = req.body;
+
+    // Basic validation
+    if (
+      !name ||
+      !amount ||
+      interestRate === undefined ||
+      interestRate === null ||
+      !investmentType
+    ) {
+      return res
+        .status(400)
+        .json({ error: "Missing required investment fields." });
+    }
+
+    const newInvestment = new Investment({
+      name,
+      amount: parseFloat(amount),
+      currentAmount: parseFloat(amount), // currentAmount is same as initial amount
+      interestRate: parseFloat(interestRate),
+      investmentType,
+      startDate: new Date(),
+      maturityDate,
+      description,
+      goalId, // Pass the extracted goalId
+      compoundingFrequency,
+      monthlyDeposit,
+      duration,
+      userName: req.user.userName, // Add userName from the verified token
+    });
+
+    await newInvestment.save();
+    console.log("✅ Investment created successfully:", newInvestment._id);
+
+    // Respond with 201 Created status and the new investment object
+    res.status(201).json(newInvestment);
+  } catch (err) {
+    console.error("❌ Error creating investment:", err);
+    res.status(500).json({ error: err.message || "Failed to add investment" });
+  }
+});
+// --- FIX ENDS HERE ---
+
 // 📌 Test endpoint to debug token and user issues
 app.get("/test-token", verifyToken, async (req, res) => {
   try {
@@ -1531,6 +1592,81 @@ app.get("/test-auth", verifyToken, (req, res) => {
     user: req.user,
     timestamp: new Date().toISOString(),
   });
+});
+
+// Get all investments
+app.get("/investments", verifyToken, async (req, res) => {
+  try {
+    console.log("📊 Getting investments for user:", req.user.userName); // Changed from req.user.id
+    console.log("📊 User object:", req.user);
+
+    const userName = req.user.userName; // Changed from userId = new mongoose.Types.ObjectId(req.user.id);
+    const investments = await Investment.find({ userName: userName }); // Changed from user: userId
+    console.log("📊 Found investments:", investments.length);
+
+    res.json(investments);
+  } catch (err) {
+    console.error("❌ Error fetching investments:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Update investment
+app.put("/investment/:id", verifyToken, async (req, res) => {
+  try {
+    const userName = req.user.userName; // Changed from userId = new mongoose.Types.ObjectId(req.user.id);
+    const investment = await Investment.findOne({
+      _id: req.params.id,
+      userName: userName,
+    }); // Changed from user: userId
+
+    if (!investment) {
+      return res
+        .status(404)
+        .json({ error: "Investment not found or not authorized" });
+    }
+
+    const updatedInvestment = await Investment.findByIdAndUpdate(
+      req.params.id,
+      req.body,
+      { new: true }
+    );
+    res.json(updatedInvestment);
+  } catch (err) {
+    res.status(500).json(err);
+  }
+});
+
+// Delete investment
+app.delete("/investment/:id", verifyToken, async (req, res) => {
+  try {
+    const userName = req.user.userName; // Changed from userId = new mongoose.Types.ObjectId(req.user.id);
+    const investment = await Investment.findOne({
+      _id: req.params.id,
+      userName: userName,
+    }); // Changed from user: userId
+
+    if (!investment) {
+      return res
+        .status(404)
+        .json({ error: "Investment not found or not authorized" });
+    }
+
+    await Investment.findByIdAndDelete(req.params.id);
+    res.json({ message: "Investment deleted" });
+  } catch (err) {
+    res.status(500).json(err);
+  }
+});
+
+// Manually trigger interest calculation (for testing)
+app.post("/calculate-interest", verifyToken, async (req, res) => {
+  try {
+    await updateDailyInterest();
+    res.json({ message: "Interest calculation triggered successfully" });
+  } catch (err) {
+    res.status(500).json(err);
+  }
 });
 
 // --- NAV Fetching and Mutual Fund API ---
@@ -1700,6 +1836,35 @@ app.post("/update-nav", async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+
+// --- Mutual Funds API Endpoints ---
+  const authHeader = req.header("Authorization");
+  console.log("🔑 Full Authorization header:", authHeader);
+
+  const token = authHeader?.replace("Bearer ", "");
+
+  console.log(
+    "🔑 Verifying token:",
+    token ? token.substring(0, 20) + "..." : "No token"
+  );
+
+  if (!token) {
+    console.log("❌ No token provided");
+    return res.status(401).json({ error: "Access denied. No token provided." });
+  }
+
+  try {
+    console.log("🔑 JWT_SECRET available:", !!JWT_SECRET);
+    const decoded = jwt.verify(token, JWT_SECRET);
+    console.log("🔑 Decoded token payload:", decoded);
+
+    req.user = decoded;
+    next();
+  } catch (error) {
+    console.log("❌ Token verification failed:", error.message);
+    res.status(400).json({ error: "Invalid token." });
+  }
+};
 
 // --- Investment API Endpoints ---
 
@@ -1938,24 +2103,13 @@ app.post("/api/stock-transactions", async (req, res) => {
     } = req.body;
 
     // Validate required fields
-    if (
-      !userName ||
-      !symbol ||
-      !companyName ||
-      !type ||
-      !quantity ||
-      !price ||
-      !total ||
-      !date
-    ) {
+    if (!userName || !symbol || !companyName || !type || !quantity || !price || !total || !date) {
       return res.status(400).json({ error: "All fields are required" });
     }
 
     // Validate transaction type
     if (!["buy", "sell"].includes(type)) {
-      return res
-        .status(400)
-        .json({ error: "Transaction type must be 'buy' or 'sell'" });
+      return res.status(400).json({ error: "Transaction type must be 'buy' or 'sell'" });
     }
 
     const stockTransaction = new StockTransaction({
@@ -2071,9 +2225,7 @@ app.delete("/api/stock-transactions/:transactionId", async (req, res) => {
   try {
     const { transactionId } = req.params;
 
-    const deletedTransaction = await StockTransaction.findByIdAndDelete(
-      transactionId
-    );
+    const deletedTransaction = await StockTransaction.findByIdAndDelete(transactionId);
 
     if (!deletedTransaction) {
       return res.status(404).json({ error: "Stock transaction not found" });
