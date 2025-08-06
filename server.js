@@ -1926,59 +1926,6 @@ app.get("/mutualfunds/:schemeCode", async (req, res) => {
 // --- Stock Companies API Endpoints ---
 
 /**
- * Get all stock companies with search functionality
- * Fetches from Finnhub API and provides pagination and search
- */
-app.get("/api/stock-companies", async (req, res) => {
-  try {
-    const { search = "", page = 1, limit = 50, exchange = "US" } = req.query;
-
-    // Finnhub API key - you can move this to environment variables
-    const FINNHUB_API_KEY = "d28seapr01qle9gsj64gd28seapr01qle9gsj650";
-
-    // Fetch stock symbols from Finnhub
-    const response = await axios.get(`https://finnhub.io/api/v1/stock/symbol`, {
-      params: {
-        exchange: exchange,
-        token: FINNHUB_API_KEY,
-      },
-    });
-
-    let companies = response.data || [];
-
-    // Filter by search term if provided
-    if (search.trim()) {
-      const searchTerm = search.toLowerCase().trim();
-      companies = companies.filter(
-        (company) =>
-          company.symbol?.toLowerCase().includes(searchTerm) ||
-          company.description?.toLowerCase().includes(searchTerm)
-      );
-    }
-
-    // Pagination
-    const startIndex = (page - 1) * limit;
-    const endIndex = startIndex + parseInt(limit);
-    const paginatedCompanies = companies.slice(startIndex, endIndex);
-
-    res.json({
-      companies: paginatedCompanies,
-      totalCompanies: companies.length,
-      currentPage: parseInt(page),
-      totalPages: Math.ceil(companies.length / limit),
-      hasNext: endIndex < companies.length,
-      hasPrev: page > 1,
-    });
-  } catch (error) {
-    console.error("Error fetching stock companies:", error);
-    res.status(500).json({
-      error: "Failed to fetch stock companies",
-      message: error.message,
-    });
-  }
-});
-
-/**
  * Get stock quote for a specific symbol
  */
 app.get("/api/stock-quote/:symbol", async (req, res) => {
@@ -2319,59 +2266,293 @@ app.delete("/api/stock-transactions/:transactionId", async (req, res) => {
 });
 
 /**
- * Get all stock companies from Finnhub API
+ * Get all stock companies from Finnhub API with exchange and country filtering
+ * Supports: US, India (NSE, BSE), UK, Hong Kong, and more
  */
 app.get("/api/stock-companies", async (req, res) => {
   try {
-    const { search } = req.query;
+    const { search, exchange = "US", country } = req.query;
 
-    // Fetch US stock symbols from Finnhub
-    const response = await fetch(
-      `https://finnhub.io/api/v1/stock/symbol?exchange=US&token=${process.env.FINNHUB_API_KEY}`
-    );
+    // Use the same Finnhub API key as other endpoints
+    const FINNHUB_API_KEY = "d28seapr01qle9gsj64gd28seapr01qle9gsj650";
 
-    if (!response.ok) {
-      throw new Error(`Finnhub API error: ${response.status}`);
+    // Define exchange mappings for different countries
+    const exchangeMap = {
+      // India
+      NSE: "NS", // National Stock Exchange of India
+      BSE: "BO", // Bombay Stock Exchange
+      INDIA: ["NS", "BO"], // Both Indian exchanges
+
+      // USA
+      US: "US",
+      NASDAQ: "US",
+      NYSE: "US",
+
+      // Other countries
+      UK: "L", // London Stock Exchange
+      HONG_KONG: "HK", // Hong Kong Stock Exchange
+      CANADA: "TO", // Toronto Stock Exchange
+      GERMANY: "F", // Frankfurt Stock Exchange
+      JAPAN: "T", // Tokyo Stock Exchange
+      AUSTRALIA: "AX", // Australian Securities Exchange
+    };
+
+    // Get exchanges to fetch based on the request
+    let exchangesToFetch = [];
+
+    if (country === "INDIA" || exchange === "INDIA") {
+      exchangesToFetch = ["NS", "BO"];
+    } else if (Array.isArray(exchangeMap[exchange.toUpperCase()])) {
+      exchangesToFetch = exchangeMap[exchange.toUpperCase()];
+    } else {
+      exchangesToFetch = [exchangeMap[exchange.toUpperCase()] || exchange];
     }
 
-    let companies = await response.json();
+    console.log(
+      `Fetching stocks from exchanges: ${exchangesToFetch.join(", ")}`
+    );
+
+    // Fetch data from all specified exchanges
+    const allCompanies = [];
+
+    for (const exchangeCode of exchangesToFetch) {
+      try {
+        const response = await fetch(
+          `https://finnhub.io/api/v1/stock/symbol?exchange=${exchangeCode}&token=${FINNHUB_API_KEY}`
+        );
+
+        if (!response.ok) {
+          console.warn(
+            `Failed to fetch from exchange ${exchangeCode}: ${response.status}`
+          );
+          continue;
+        }
+
+        const exchangeCompanies = await response.json();
+
+        if (Array.isArray(exchangeCompanies)) {
+          // Add exchange info to each company
+          const companiesWithExchange = exchangeCompanies.map((company) => ({
+            ...company,
+            exchange: exchangeCode,
+            country: getCountryFromExchange(exchangeCode),
+          }));
+
+          allCompanies.push(...companiesWithExchange);
+        }
+      } catch (error) {
+        console.warn(
+          `Error fetching from exchange ${exchangeCode}:`,
+          error.message
+        );
+      }
+    }
 
     // Filter out companies with invalid symbols or names
-    companies = companies.filter(
+    let filteredCompanies = allCompanies.filter(
       (company) =>
         company.symbol &&
         company.description &&
-        !company.symbol.includes(".") &&
-        company.symbol.length <= 5
+        company.description.trim() !== ""
     );
+
+    // For Indian exchanges, allow longer symbols and dots
+    if (exchangesToFetch.some((ex) => ["NS", "BO"].includes(ex))) {
+      // Indian stocks can have longer symbols and dots
+      filteredCompanies = filteredCompanies.filter(
+        (company) => company.symbol.length <= 20 // Longer limit for Indian stocks
+      );
+    } else {
+      // For other exchanges, keep the original filtering
+      filteredCompanies = filteredCompanies.filter(
+        (company) => !company.symbol.includes(".") && company.symbol.length <= 8
+      );
+    }
 
     // If search query is provided, filter companies
     if (search && search.trim()) {
       const searchTerm = search.trim().toLowerCase();
-      companies = companies.filter(
+      filteredCompanies = filteredCompanies.filter(
         (company) =>
           company.symbol.toLowerCase().includes(searchTerm) ||
           company.description.toLowerCase().includes(searchTerm)
       );
     }
 
+    // Sort by symbol for consistency
+    filteredCompanies.sort((a, b) => a.symbol.localeCompare(b.symbol));
+
     // Limit to reasonable number and format response
-    companies = companies.slice(0, 1000).map((company) => ({
-      symbol: company.symbol,
-      name: company.description,
-      displayName: company.displaySymbol || company.symbol,
-      type: company.type || "Common Stock",
-    }));
+    const limitedCompanies = filteredCompanies
+      .slice(0, 2000)
+      .map((company) => ({
+        symbol: company.symbol,
+        name: company.description,
+        displayName: company.displaySymbol || company.symbol,
+        type: company.type || "Common Stock",
+        exchange: company.exchange,
+        country: company.country,
+        currency: company.currency || getCurrencyFromExchange(company.exchange),
+        mic: company.mic, // Market Identifier Code
+      }));
+
+    // Group by exchange for better organization
+    const groupedByExchange = limitedCompanies.reduce((acc, company) => {
+      const exchangeName = getExchangeName(company.exchange);
+      if (!acc[exchangeName]) {
+        acc[exchangeName] = [];
+      }
+      acc[exchangeName].push(company);
+      return acc;
+    }, {});
 
     res.json({
-      companies,
-      total: companies.length,
+      companies: limitedCompanies,
+      groupedByExchange,
+      total: limitedCompanies.length,
+      totalAvailable: filteredCompanies.length,
+      exchanges: exchangesToFetch,
       search: search || "",
+      requestedExchange: exchange,
+      requestedCountry: country,
+      message:
+        limitedCompanies.length === 0
+          ? `No companies found for exchange ${exchange}. This may be due to API key limitations or exchange availability.`
+          : null,
     });
   } catch (error) {
     console.error("Error fetching stock companies:", error);
     res.status(500).json({
       error: "Failed to fetch stock companies",
+      message: error.message,
+    });
+  }
+});
+
+// Helper function to get country from exchange code
+function getCountryFromExchange(exchangeCode) {
+  const countryMap = {
+    NS: "India",
+    BO: "India",
+    US: "United States",
+    L: "United Kingdom",
+    HK: "Hong Kong",
+    TO: "Canada",
+    F: "Germany",
+    T: "Japan",
+    AX: "Australia",
+  };
+  return countryMap[exchangeCode] || "Unknown";
+}
+
+// Helper function to get currency from exchange
+function getCurrencyFromExchange(exchangeCode) {
+  const currencyMap = {
+    NS: "INR",
+    BO: "INR",
+    US: "USD",
+    L: "GBP",
+    HK: "HKD",
+    TO: "CAD",
+    F: "EUR",
+    T: "JPY",
+    AX: "AUD",
+  };
+  return currencyMap[exchangeCode] || "USD";
+}
+
+// Helper function to get exchange display name
+function getExchangeName(exchangeCode) {
+  const nameMap = {
+    NS: "NSE (National Stock Exchange of India)",
+    BO: "BSE (Bombay Stock Exchange)",
+    US: "US Exchanges (NASDAQ, NYSE)",
+    L: "London Stock Exchange",
+    HK: "Hong Kong Stock Exchange",
+    TO: "Toronto Stock Exchange",
+    F: "Frankfurt Stock Exchange",
+    T: "Tokyo Stock Exchange",
+    AX: "Australian Securities Exchange",
+  };
+  return nameMap[exchangeCode] || exchangeCode;
+}
+
+/**
+ * Get available exchanges and their status
+ */
+app.get("/api/stock-exchanges", async (req, res) => {
+  try {
+    const FINNHUB_API_KEY = "d28seapr01qle9gsj64gd28seapr01qle9gsj650";
+
+    const exchangesToTest = [
+      {
+        code: "US",
+        name: "US Exchanges (NASDAQ, NYSE)",
+        country: "United States",
+      },
+      {
+        code: "NS",
+        name: "National Stock Exchange of India",
+        country: "India",
+      },
+      { code: "BO", name: "Bombay Stock Exchange", country: "India" },
+      { code: "L", name: "London Stock Exchange", country: "United Kingdom" },
+      { code: "HK", name: "Hong Kong Stock Exchange", country: "Hong Kong" },
+      { code: "TO", name: "Toronto Stock Exchange", country: "Canada" },
+      { code: "F", name: "Frankfurt Stock Exchange", country: "Germany" },
+      { code: "T", name: "Tokyo Stock Exchange", country: "Japan" },
+      {
+        code: "AX",
+        name: "Australian Securities Exchange",
+        country: "Australia",
+      },
+    ];
+
+    const exchangeStatus = [];
+
+    for (const exchange of exchangesToTest) {
+      try {
+        const response = await fetch(
+          `https://finnhub.io/api/v1/stock/symbol?exchange=${exchange.code}&token=${FINNHUB_API_KEY}`
+        );
+
+        if (response.ok) {
+          const data = await response.json();
+          exchangeStatus.push({
+            ...exchange,
+            available: true,
+            totalCompanies: Array.isArray(data) ? data.length : 0,
+            status: "Available",
+          });
+        } else {
+          exchangeStatus.push({
+            ...exchange,
+            available: false,
+            totalCompanies: 0,
+            status: `HTTP ${response.status}`,
+          });
+        }
+      } catch (error) {
+        exchangeStatus.push({
+          ...exchange,
+          available: false,
+          totalCompanies: 0,
+          status: `Error: ${error.message}`,
+        });
+      }
+    }
+
+    res.json({
+      exchanges: exchangeStatus,
+      availableExchanges: exchangeStatus.filter(
+        (ex) => ex.available && ex.totalCompanies > 0
+      ),
+      totalExchangesTested: exchangesToTest.length,
+    });
+  } catch (error) {
+    console.error("Error checking exchange availability:", error);
+    res.status(500).json({
+      error: "Failed to check exchange availability",
       message: error.message,
     });
   }
