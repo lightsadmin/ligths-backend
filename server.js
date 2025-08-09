@@ -2096,66 +2096,6 @@ app.get("/api/stock-portfolio/:userName", async (req, res) => {
 });
 
 /**
- * Get user's stock investments (from investments collection)
- */
-app.get("/api/stock-investments/:userName", verifyToken, async (req, res) => {
-  try {
-    const userName = req.user.userName;
-
-    // Get all stock investments for the user
-    const stockInvestments = await Investment.find({
-      userName: userName,
-      investmentType: "Stock",
-    }).sort({ startDate: -1 });
-
-    // Group by stock symbol to get portfolio summary
-    const portfolioMap = {};
-
-    stockInvestments.forEach((investment) => {
-      const symbol = investment.stockSymbol;
-      if (!portfolioMap[symbol]) {
-        portfolioMap[symbol] = {
-          symbol,
-          companyName: investment.name.split(" - ")[0],
-          totalShares: 0,
-          totalInvested: 0,
-          transactions: [],
-        };
-      }
-
-      portfolioMap[symbol].totalShares += investment.stockQuantity;
-      portfolioMap[symbol].totalInvested += investment.amount;
-      portfolioMap[symbol].transactions.push({
-        type: investment.stockQuantity > 0 ? "buy" : "sell",
-        quantity: Math.abs(investment.stockQuantity),
-        price: investment.stockPrice,
-        amount: investment.amount,
-        date: investment.startDate,
-        description: investment.description,
-      });
-    });
-
-    // Convert to array and filter out zero holdings
-    const portfolio = Object.values(portfolioMap).filter(
-      (item) => item.totalShares > 0
-    );
-
-    res.json({
-      stockInvestments,
-      portfolio,
-      totalStocks: portfolio.length,
-      totalInvested: portfolio.reduce(
-        (sum, item) => sum + item.totalInvested,
-        0
-      ),
-    });
-  } catch (error) {
-    console.error("Error fetching stock investments:", error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-/**
  * Delete a stock transaction
  */
 app.delete("/api/stock-transactions/:transactionId", async (req, res) => {
@@ -2847,6 +2787,434 @@ app.get("/api/mf-analytics", verifyToken, async (req, res) => {
 });
 
 // �🔹 **Start Server**
+// 📈 **Stock (Equity) CRUD Operations**
+
+/**
+ * Get all stock investments for a user
+ */
+app.get("/api/stock-investments", verifyToken, async (req, res) => {
+  try {
+    console.log("📈 Getting stock investments for user:", req.user.userName);
+
+    const userName = req.user.userName;
+    const stockInvestments = await Investment.find({
+      userName: userName,
+      investmentType: "Stock",
+    }).sort({ startDate: -1 });
+
+    console.log("📈 Found stock investments:", stockInvestments.length);
+    res.json(stockInvestments);
+  } catch (err) {
+    console.error("❌ Error fetching stock investments:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Create a new stock investment
+ */
+app.post("/api/stock-investments", verifyToken, async (req, res) => {
+  try {
+    console.log("💰 Creating stock investment for user:", req.user.userName);
+    console.log("💰 Received stock investment data:", req.body);
+
+    const {
+      name,
+      amount,
+      stockSymbol,
+      stockQuantity,
+      stockPrice,
+      description,
+      startDate,
+      goalId,
+    } = req.body;
+
+    // Basic validation
+    if (!name || !amount || !stockSymbol || !stockQuantity || !stockPrice) {
+      return res.status(400).json({
+        error: "Name, amount, stock symbol, quantity, and price are required.",
+      });
+    }
+
+    const newStockInvestment = new Investment({
+      name,
+      amount: parseFloat(amount),
+      currentAmount: parseFloat(amount),
+      interestRate: 0, // Stocks don't have fixed interest rate
+      investmentType: "Stock",
+      startDate: startDate ? new Date(startDate) : new Date(),
+      description:
+        description ||
+        `${stockQuantity} shares of ${stockSymbol} at $${stockPrice} per share`,
+      stockSymbol: stockSymbol.toUpperCase(),
+      stockQuantity: parseFloat(stockQuantity),
+      stockPrice: parseFloat(stockPrice),
+      goalId: goalId || null,
+      userName: req.user.userName,
+    });
+
+    await newStockInvestment.save();
+
+    console.log(
+      "✅ Stock investment created successfully:",
+      newStockInvestment._id
+    );
+    res.status(201).json(newStockInvestment);
+  } catch (err) {
+    console.error("❌ Error creating stock investment:", err);
+    res
+      .status(500)
+      .json({ error: err.message || "Failed to add stock investment" });
+  }
+});
+
+/**
+ * Get a specific stock investment by ID
+ */
+app.get("/api/stock-investments/:id", verifyToken, async (req, res) => {
+  try {
+    const userName = req.user.userName;
+    const stockInvestment = await Investment.findOne({
+      _id: req.params.id,
+      userName: userName,
+      investmentType: "Stock",
+    });
+
+    if (!stockInvestment) {
+      return res
+        .status(404)
+        .json({ error: "Stock investment not found or not authorized" });
+    }
+
+    res.json(stockInvestment);
+  } catch (err) {
+    console.error("❌ Error fetching stock investment:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Update a stock investment
+ */
+app.put("/api/stock-investments/:id", verifyToken, async (req, res) => {
+  try {
+    const userName = req.user.userName;
+    const stockInvestment = await Investment.findOne({
+      _id: req.params.id,
+      userName: userName,
+      investmentType: "Stock",
+    });
+
+    if (!stockInvestment) {
+      return res
+        .status(404)
+        .json({ error: "Stock investment not found or not authorized" });
+    }
+
+    // Update allowed fields
+    const updateData = {
+      ...req.body,
+      investmentType: "Stock", // Ensure it remains a stock investment
+      userName: userName, // Ensure ownership doesn't change
+    };
+
+    const updatedStockInvestment = await Investment.findByIdAndUpdate(
+      req.params.id,
+      updateData,
+      { new: true }
+    );
+
+    console.log(
+      "✅ Stock investment updated successfully:",
+      updatedStockInvestment._id
+    );
+    res.json(updatedStockInvestment);
+  } catch (err) {
+    console.error("❌ Error updating stock investment:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Delete a stock investment
+ */
+app.delete("/api/stock-investments/:id", verifyToken, async (req, res) => {
+  try {
+    const userName = req.user.userName;
+    const stockInvestment = await Investment.findOne({
+      _id: req.params.id,
+      userName: userName,
+      investmentType: "Stock",
+    });
+
+    if (!stockInvestment) {
+      return res
+        .status(404)
+        .json({ error: "Stock investment not found or not authorized" });
+    }
+
+    await Investment.findByIdAndDelete(req.params.id);
+
+    console.log("✅ Stock investment deleted successfully:", req.params.id);
+    res.json({ message: "Stock investment deleted successfully" });
+  } catch (err) {
+    console.error("❌ Error deleting stock investment:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Get stock portfolio summary for a user
+ */
+app.get("/api/stock-portfolio", verifyToken, async (req, res) => {
+  try {
+    const userName = req.user.userName;
+    const stockInvestments = await Investment.find({
+      userName: userName,
+      investmentType: "Stock",
+    }).sort({ startDate: -1 });
+
+    // Group by stock symbol to create portfolio summary
+    const portfolioMap = {};
+    let totalInvestments = 0;
+    let totalInvested = 0;
+    let totalCurrentValue = 0;
+
+    stockInvestments.forEach((investment) => {
+      const symbol = investment.stockSymbol;
+      if (!portfolioMap[symbol]) {
+        portfolioMap[symbol] = {
+          symbol,
+          companyName: investment.name.split(" - ")[0] || symbol,
+          totalShares: 0,
+          totalInvested: 0,
+          averagePrice: 0,
+          transactions: [],
+        };
+      }
+
+      portfolioMap[symbol].totalShares += investment.stockQuantity;
+      portfolioMap[symbol].totalInvested += investment.amount;
+      portfolioMap[symbol].transactions.push({
+        type: investment.stockQuantity > 0 ? "buy" : "sell",
+        quantity: Math.abs(investment.stockQuantity),
+        price: investment.stockPrice,
+        amount: investment.amount,
+        date: investment.startDate,
+        description: investment.description,
+      });
+
+      totalInvestments++;
+      totalInvested += investment.amount;
+      totalCurrentValue += investment.currentAmount;
+    });
+
+    // Calculate average prices and filter out zero holdings
+    const portfolio = Object.values(portfolioMap)
+      .map((item) => ({
+        ...item,
+        averagePrice:
+          item.totalShares > 0 ? item.totalInvested / item.totalShares : 0,
+      }))
+      .filter((item) => item.totalShares > 0);
+
+    const totalProfit = totalCurrentValue - totalInvested;
+    const profitPercentage =
+      totalInvested > 0 ? ((totalProfit / totalInvested) * 100).toFixed(2) : 0;
+
+    res.json({
+      summary: {
+        totalInvestments,
+        totalStocks: portfolio.length,
+        totalInvested,
+        totalCurrentValue,
+        totalProfit,
+        profitPercentage: parseFloat(profitPercentage),
+      },
+      portfolio,
+      investments: stockInvestments,
+    });
+  } catch (err) {
+    console.error("❌ Error fetching stock portfolio:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Get stock investment performance analytics
+ */
+app.get("/api/stock-analytics", verifyToken, async (req, res) => {
+  try {
+    const userName = req.user.userName;
+    const stockInvestments = await Investment.find({
+      userName: userName,
+      investmentType: "Stock",
+    }).sort({ startDate: 1 });
+
+    if (stockInvestments.length === 0) {
+      return res.json({
+        message: "No stock investments found",
+        analytics: {
+          performanceMetrics: {
+            bestPerformer: null,
+            worstPerformer: null,
+            totalReturn: 0,
+            averageReturn: 0,
+          },
+          sectorAllocation: [],
+          monthlyPerformance: [],
+        },
+      });
+    }
+
+    // Calculate individual stock performance
+    const stockPerformance = {};
+    stockInvestments.forEach((investment) => {
+      const symbol = investment.stockSymbol;
+      if (!stockPerformance[symbol]) {
+        stockPerformance[symbol] = {
+          symbol,
+          name: investment.name.split(" - ")[0] || symbol,
+          totalInvested: 0,
+          totalCurrentValue: 0,
+          totalShares: 0,
+        };
+      }
+
+      stockPerformance[symbol].totalInvested += investment.amount;
+      stockPerformance[symbol].totalCurrentValue += investment.currentAmount;
+      stockPerformance[symbol].totalShares += investment.stockQuantity;
+    });
+
+    // Calculate performance metrics for each stock
+    const performanceArray = Object.values(stockPerformance).map((stock) => {
+      const profit = stock.totalCurrentValue - stock.totalInvested;
+      const profitPercentage =
+        stock.totalInvested > 0 ? (profit / stock.totalInvested) * 100 : 0;
+
+      return {
+        ...stock,
+        profit,
+        profitPercentage: parseFloat(profitPercentage.toFixed(2)),
+        averagePrice:
+          stock.totalShares > 0 ? stock.totalInvested / stock.totalShares : 0,
+      };
+    });
+
+    // Find best and worst performers
+    const bestPerformer =
+      performanceArray.length > 0
+        ? performanceArray.reduce((best, current) =>
+            current.profitPercentage > best.profitPercentage ? current : best
+          )
+        : null;
+
+    const worstPerformer =
+      performanceArray.length > 0
+        ? performanceArray.reduce((worst, current) =>
+            current.profitPercentage < worst.profitPercentage ? current : worst
+          )
+        : null;
+
+    // Calculate total return
+    const totalInvested = performanceArray.reduce(
+      (sum, stock) => sum + stock.totalInvested,
+      0
+    );
+    const totalCurrentValue = performanceArray.reduce(
+      (sum, stock) => sum + stock.totalCurrentValue,
+      0
+    );
+    const totalReturn =
+      totalInvested > 0
+        ? ((totalCurrentValue - totalInvested) / totalInvested) * 100
+        : 0;
+
+    // Calculate average return
+    const averageReturn =
+      performanceArray.length > 0
+        ? performanceArray.reduce(
+            (sum, stock) => sum + stock.profitPercentage,
+            0
+          ) / performanceArray.length
+        : 0;
+
+    // Generate monthly performance data (simplified)
+    const monthlyPerformance = [];
+    const currentDate = new Date();
+    const startDate =
+      stockInvestments.length > 0
+        ? new Date(
+            Math.min(
+              ...stockInvestments.map((inv) =>
+                new Date(inv.startDate).getTime()
+              )
+            )
+          )
+        : new Date();
+
+    for (
+      let d = new Date(startDate);
+      d <= currentDate;
+      d.setMonth(d.getMonth() + 1)
+    ) {
+      const monthKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(
+        2,
+        "0"
+      )}`;
+
+      // Calculate cumulative investment and value for this month
+      const relevantInvestments = stockInvestments.filter(
+        (inv) => new Date(inv.startDate) <= d
+      );
+
+      const monthlyInvested = relevantInvestments.reduce(
+        (sum, inv) => sum + inv.amount,
+        0
+      );
+      const monthlyValue = relevantInvestments.reduce(
+        (sum, inv) => sum + inv.currentAmount,
+        0
+      );
+
+      monthlyPerformance.push({
+        month: monthKey,
+        invested: monthlyInvested,
+        value: monthlyValue,
+        profit: monthlyValue - monthlyInvested,
+        return:
+          monthlyInvested > 0
+            ? ((monthlyValue - monthlyInvested) / monthlyInvested) * 100
+            : 0,
+      });
+    }
+
+    res.json({
+      analytics: {
+        performanceMetrics: {
+          bestPerformer,
+          worstPerformer,
+          totalReturn: parseFloat(totalReturn.toFixed(2)),
+          averageReturn: parseFloat(averageReturn.toFixed(2)),
+          totalStocks: performanceArray.length,
+        },
+        stockPerformance: performanceArray,
+        monthlyPerformance,
+        summary: {
+          totalInvestments: stockInvestments.length,
+          totalInvested,
+          totalCurrentValue,
+          totalProfit: totalCurrentValue - totalInvested,
+        },
+      },
+    });
+  } catch (err) {
+    console.error("❌ Error fetching stock analytics:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 🔹 **Start Server**
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(
