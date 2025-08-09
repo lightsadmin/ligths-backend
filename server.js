@@ -2473,7 +2473,380 @@ app.get("/api/stock-exchanges", async (req, res) => {
   }
 });
 
-// 🔹 **Start Server**
+// � **MF (Mutual Fund) CRUD Operations**
+
+/**
+ * Get all MF investments for a user
+ */
+app.get("/api/mf-investments", verifyToken, async (req, res) => {
+  try {
+    console.log("📈 Getting MF investments for user:", req.user.userName);
+
+    const userName = req.user.userName;
+    const mfInvestments = await Investment.find({
+      userName: userName,
+      investmentType: "Mutual Fund",
+    }).sort({ startDate: -1 });
+
+    console.log("📈 Found MF investments:", mfInvestments.length);
+    res.json(mfInvestments);
+  } catch (err) {
+    console.error("❌ Error fetching MF investments:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Create a new MF investment
+ */
+app.post("/api/mf-investments", verifyToken, async (req, res) => {
+  try {
+    console.log("💰 Creating MF investment for user:", req.user.userName);
+    console.log("💰 Received MF investment data:", req.body);
+
+    const {
+      name,
+      amount,
+      monthlyDeposit,
+      duration,
+      description,
+      startDate,
+      goalId,
+    } = req.body;
+
+    // Basic validation
+    if (!name || !monthlyDeposit || !duration) {
+      return res.status(400).json({
+        error: "Name, monthly deposit amount, and duration are required.",
+      });
+    }
+
+    const newMFInvestment = new Investment({
+      name,
+      amount: parseFloat(monthlyDeposit), // Initial amount is monthly deposit
+      currentAmount: parseFloat(monthlyDeposit),
+      interestRate: 12, // Default 12% for MF SIP
+      investmentType: "Mutual Fund",
+      startDate: startDate ? new Date(startDate) : new Date(),
+      description: description || `SIP in ${name}`,
+      monthlyDeposit: parseFloat(monthlyDeposit),
+      duration: parseFloat(duration),
+      goalId: goalId || null,
+      userName: req.user.userName,
+      compoundingFrequency: "monthly",
+    });
+
+    await newMFInvestment.save();
+
+    console.log("✅ MF investment created successfully:", newMFInvestment._id);
+    res.status(201).json(newMFInvestment);
+  } catch (err) {
+    console.error("❌ Error creating MF investment:", err);
+    res
+      .status(500)
+      .json({ error: err.message || "Failed to add MF investment" });
+  }
+});
+
+/**
+ * Get a specific MF investment by ID
+ */
+app.get("/api/mf-investments/:id", verifyToken, async (req, res) => {
+  try {
+    const userName = req.user.userName;
+    const mfInvestment = await Investment.findOne({
+      _id: req.params.id,
+      userName: userName,
+      investmentType: "Mutual Fund",
+    });
+
+    if (!mfInvestment) {
+      return res
+        .status(404)
+        .json({ error: "MF investment not found or not authorized" });
+    }
+
+    res.json(mfInvestment);
+  } catch (err) {
+    console.error("❌ Error fetching MF investment:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Update an MF investment
+ */
+app.put("/api/mf-investments/:id", verifyToken, async (req, res) => {
+  try {
+    const userName = req.user.userName;
+    const mfInvestment = await Investment.findOne({
+      _id: req.params.id,
+      userName: userName,
+      investmentType: "Mutual Fund",
+    });
+
+    if (!mfInvestment) {
+      return res
+        .status(404)
+        .json({ error: "MF investment not found or not authorized" });
+    }
+
+    // Update allowed fields
+    const updateData = {
+      ...req.body,
+      investmentType: "Mutual Fund", // Ensure it remains MF
+      userName: userName, // Ensure ownership doesn't change
+    };
+
+    const updatedMFInvestment = await Investment.findByIdAndUpdate(
+      req.params.id,
+      updateData,
+      { new: true }
+    );
+
+    console.log(
+      "✅ MF investment updated successfully:",
+      updatedMFInvestment._id
+    );
+    res.json(updatedMFInvestment);
+  } catch (err) {
+    console.error("❌ Error updating MF investment:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Delete an MF investment
+ */
+app.delete("/api/mf-investments/:id", verifyToken, async (req, res) => {
+  try {
+    const userName = req.user.userName;
+    const mfInvestment = await Investment.findOne({
+      _id: req.params.id,
+      userName: userName,
+      investmentType: "Mutual Fund",
+    });
+
+    if (!mfInvestment) {
+      return res
+        .status(404)
+        .json({ error: "MF investment not found or not authorized" });
+    }
+
+    await Investment.findByIdAndDelete(req.params.id);
+
+    console.log("✅ MF investment deleted successfully:", req.params.id);
+    res.json({ message: "MF investment deleted successfully" });
+  } catch (err) {
+    console.error("❌ Error deleting MF investment:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Get MF portfolio summary for a user
+ */
+app.get("/api/mf-portfolio", verifyToken, async (req, res) => {
+  try {
+    const userName = req.user.userName;
+    const mfInvestments = await Investment.find({
+      userName: userName,
+      investmentType: "Mutual Fund",
+    }).sort({ startDate: -1 });
+
+    // Calculate portfolio summary
+    const totalInvestments = mfInvestments.length;
+    const totalInvested = mfInvestments.reduce(
+      (sum, inv) => sum + inv.amount,
+      0
+    );
+    const totalCurrentValue = mfInvestments.reduce(
+      (sum, inv) => sum + inv.currentAmount,
+      0
+    );
+    const totalMonthlyDeposit = mfInvestments.reduce(
+      (sum, inv) => sum + (inv.monthlyDeposit || 0),
+      0
+    );
+    const totalProfit = totalCurrentValue - totalInvested;
+    const profitPercentage =
+      totalInvested > 0 ? ((totalProfit / totalInvested) * 100).toFixed(2) : 0;
+
+    // Group by goal if goalId exists
+    const groupedByGoal = mfInvestments.reduce((acc, investment) => {
+      const goalId = investment.goalId || "no-goal";
+      if (!acc[goalId]) {
+        acc[goalId] = {
+          goalId: goalId,
+          investments: [],
+          totalInvested: 0,
+          totalCurrentValue: 0,
+          totalMonthlyDeposit: 0,
+        };
+      }
+      acc[goalId].investments.push(investment);
+      acc[goalId].totalInvested += investment.amount;
+      acc[goalId].totalCurrentValue += investment.currentAmount;
+      acc[goalId].totalMonthlyDeposit += investment.monthlyDeposit || 0;
+      return acc;
+    }, {});
+
+    res.json({
+      summary: {
+        totalInvestments,
+        totalInvested,
+        totalCurrentValue,
+        totalMonthlyDeposit,
+        totalProfit,
+        profitPercentage: parseFloat(profitPercentage),
+      },
+      investments: mfInvestments,
+      groupedByGoal: Object.values(groupedByGoal),
+    });
+  } catch (err) {
+    console.error("❌ Error fetching MF portfolio:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Get MF investment performance analytics
+ */
+app.get("/api/mf-analytics", verifyToken, async (req, res) => {
+  try {
+    const userName = req.user.userName;
+    const mfInvestments = await Investment.find({
+      userName: userName,
+      investmentType: "Mutual Fund",
+    }).sort({ startDate: 1 });
+
+    if (mfInvestments.length === 0) {
+      return res.json({
+        message: "No MF investments found",
+        analytics: {
+          monthlyGrowth: [],
+          performanceMetrics: {
+            bestPerformer: null,
+            worstPerformer: null,
+            averageReturn: 0,
+            totalSIPAmount: 0,
+          },
+        },
+      });
+    }
+
+    // Calculate individual investment performance
+    const investmentPerformance = mfInvestments.map((investment) => {
+      const invested = investment.amount;
+      const current = investment.currentAmount;
+      const profit = current - invested;
+      const profitPercentage = invested > 0 ? (profit / invested) * 100 : 0;
+
+      return {
+        id: investment._id,
+        name: investment.name,
+        invested,
+        current,
+        profit,
+        profitPercentage: parseFloat(profitPercentage.toFixed(2)),
+        monthlyDeposit: investment.monthlyDeposit || 0,
+        duration: investment.duration || 0,
+      };
+    });
+
+    // Find best and worst performers
+    const bestPerformer = investmentPerformance.reduce((best, current) =>
+      current.profitPercentage > best.profitPercentage ? current : best
+    );
+
+    const worstPerformer = investmentPerformance.reduce((worst, current) =>
+      current.profitPercentage < worst.profitPercentage ? current : worst
+    );
+
+    // Calculate average return
+    const averageReturn =
+      investmentPerformance.length > 0
+        ? investmentPerformance.reduce(
+            (sum, inv) => sum + inv.profitPercentage,
+            0
+          ) / investmentPerformance.length
+        : 0;
+
+    // Calculate total SIP amount
+    const totalSIPAmount = mfInvestments.reduce(
+      (sum, inv) => sum + (inv.monthlyDeposit || 0),
+      0
+    );
+
+    // Generate monthly growth data (simulated based on investment dates)
+    const monthlyGrowth = [];
+    const currentDate = new Date();
+    const startDate = new Date(
+      Math.min(...mfInvestments.map((inv) => new Date(inv.startDate).getTime()))
+    );
+
+    for (
+      let d = new Date(startDate);
+      d <= currentDate;
+      d.setMonth(d.getMonth() + 1)
+    ) {
+      const monthKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(
+        2,
+        "0"
+      )}`;
+
+      // Calculate cumulative investment and value for this month
+      const relevantInvestments = mfInvestments.filter(
+        (inv) => new Date(inv.startDate) <= d
+      );
+
+      const monthlyInvested = relevantInvestments.reduce(
+        (sum, inv) => sum + inv.amount,
+        0
+      );
+      const monthlyValue = relevantInvestments.reduce(
+        (sum, inv) => sum + inv.currentAmount,
+        0
+      );
+
+      monthlyGrowth.push({
+        month: monthKey,
+        invested: monthlyInvested,
+        value: monthlyValue,
+        profit: monthlyValue - monthlyInvested,
+      });
+    }
+
+    res.json({
+      analytics: {
+        investmentPerformance,
+        monthlyGrowth,
+        performanceMetrics: {
+          bestPerformer,
+          worstPerformer,
+          averageReturn: parseFloat(averageReturn.toFixed(2)),
+          totalSIPAmount,
+        },
+        summary: {
+          totalInvestments: mfInvestments.length,
+          totalInvested: mfInvestments.reduce(
+            (sum, inv) => sum + inv.amount,
+            0
+          ),
+          totalCurrentValue: mfInvestments.reduce(
+            (sum, inv) => sum + inv.currentAmount,
+            0
+          ),
+        },
+      },
+    });
+  } catch (err) {
+    console.error("❌ Error fetching MF analytics:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// �🔹 **Start Server**
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(
