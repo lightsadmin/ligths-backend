@@ -2876,10 +2876,12 @@ app.post("/api/stock-investments", verifyToken, async (req, res) => {
           "✅ Stock investment deleted (sold all shares):",
           existingInvestment._id
         );
-        res.status(200).json({
-          message: "Stock investment deleted - all shares sold",
-          deletedId: existingInvestment._id,
-        });
+        res
+          .status(200)
+          .json({
+            message: "Stock investment deleted - all shares sold",
+            deletedId: existingInvestment._id,
+          });
       } else {
         // Partial sell or additional buy
         const newTotalAmount =
