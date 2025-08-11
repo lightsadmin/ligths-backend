@@ -2815,10 +2815,7 @@ app.get("/api/stock-investments", verifyToken, async (req, res) => {
  */
 app.post("/api/stock-investments", verifyToken, async (req, res) => {
   try {
-    console.log(
-      "💰 Creating/updating stock investment for user:",
-      req.user.userName
-    );
+    console.log("💰 Creating stock investment for user:", req.user.userName);
     console.log("💰 Received stock investment data:", req.body);
 
     const {
@@ -2839,127 +2836,32 @@ app.post("/api/stock-investments", verifyToken, async (req, res) => {
       });
     }
 
-    const symbolUpper = stockSymbol.toUpperCase();
-    const quantityNum = parseFloat(stockQuantity);
-    const priceNum = parseFloat(stockPrice);
-    const amountNum = parseFloat(amount);
-
-    // Check if there's already an existing stock investment for this symbol
-    const existingInvestment = await Investment.findOne({
-      userName: req.user.userName,
-      stockSymbol: symbolUpper,
+    const newStockInvestment = new Investment({
+      name,
+      amount: parseFloat(amount),
+      currentAmount: parseFloat(amount),
+      interestRate: 0, // Stocks don't have fixed interest rate
       investmentType: "Stock",
+      startDate: startDate ? new Date(startDate) : new Date(),
+      description:
+        description ||
+        `${stockQuantity} shares of ${stockSymbol} at $${stockPrice} per share`,
+      stockSymbol: stockSymbol.toUpperCase(),
+      stockQuantity: parseFloat(stockQuantity),
+      stockPrice: parseFloat(stockPrice),
+      goalId: goalId || null,
+      userName: req.user.userName,
     });
 
-    // Validate sell transactions
-    if (
-      quantityNum < 0 &&
-      (!existingInvestment ||
-        existingInvestment.stockQuantity < Math.abs(quantityNum))
-    ) {
-      return res.status(400).json({
-        error: `Cannot sell ${Math.abs(quantityNum)} shares. You only own ${
-          existingInvestment ? existingInvestment.stockQuantity : 0
-        } shares of ${symbolUpper}.`,
-      });
-    }
+    await newStockInvestment.save();
 
-    if (existingInvestment) {
-      // Update existing investment
-      const newTotalQuantity = existingInvestment.stockQuantity + quantityNum;
-
-      // Handle sell transactions (negative quantity)
-      if (newTotalQuantity <= 0) {
-        // If selling all or more than owned, delete the investment
-        await Investment.findByIdAndDelete(existingInvestment._id);
-        console.log(
-          "✅ Stock investment deleted (sold all shares):",
-          existingInvestment._id
-        );
-        res
-          .status(200)
-          .json({
-            message: "Stock investment deleted - all shares sold",
-            deletedId: existingInvestment._id,
-          });
-      } else {
-        // Partial sell or additional buy
-        const newTotalAmount =
-          quantityNum > 0
-            ? existingInvestment.amount + amountNum // Buy: add amount
-            : existingInvestment.amount -
-              existingInvestment.stockPrice * Math.abs(quantityNum); // Sell: subtract based on current average price
-
-        const newAveragePrice =
-          quantityNum > 0
-            ? newTotalAmount / newTotalQuantity // Buy: calculate new average
-            : existingInvestment.stockPrice; // Sell: keep same average price
-
-        existingInvestment.stockQuantity = newTotalQuantity;
-        existingInvestment.amount = newTotalAmount;
-        existingInvestment.currentAmount = newTotalAmount;
-        existingInvestment.stockPrice = newAveragePrice;
-        existingInvestment.description = `${newTotalQuantity} shares of ${symbolUpper} at average price ${newAveragePrice.toFixed(
-          2
-        )} per share${
-          goalId && goalId !== existingInvestment.goalId
-            ? ` - Linked to goal`
-            : ""
-        }`;
-
-        // Update goal if provided and different
-        if (goalId && goalId !== existingInvestment.goalId) {
-          existingInvestment.goalId = goalId;
-        }
-
-        await existingInvestment.save();
-
-        console.log(
-          "✅ Stock investment updated successfully:",
-          existingInvestment._id,
-          "New quantity:",
-          newTotalQuantity
-        );
-        res.status(200).json(existingInvestment);
-      }
-    } else {
-      // Trying to create new investment
-      if (quantityNum < 0) {
-        return res.status(400).json({
-          error: `Cannot sell ${Math.abs(
-            quantityNum
-          )} shares of ${symbolUpper}. You don't own any shares of this stock.`,
-        });
-      }
-
-      // Create new investment (only for buy transactions)
-      const newStockInvestment = new Investment({
-        name,
-        amount: amountNum,
-        currentAmount: amountNum,
-        interestRate: 0, // Stocks don't have fixed interest rate
-        investmentType: "Stock",
-        startDate: startDate ? new Date(startDate) : new Date(),
-        description:
-          description ||
-          `${quantityNum} shares of ${symbolUpper} at $${priceNum} per share`,
-        stockSymbol: symbolUpper,
-        stockQuantity: quantityNum,
-        stockPrice: priceNum,
-        goalId: goalId || null,
-        userName: req.user.userName,
-      });
-
-      await newStockInvestment.save();
-
-      console.log(
-        "✅ New stock investment created successfully:",
-        newStockInvestment._id
-      );
-      res.status(201).json(newStockInvestment);
-    }
+    console.log(
+      "✅ Stock investment created successfully:",
+      newStockInvestment._id
+    );
+    res.status(201).json(newStockInvestment);
   } catch (err) {
-    console.error("❌ Error creating/updating stock investment:", err);
+    console.error("❌ Error creating stock investment:", err);
     res
       .status(500)
       .json({ error: err.message || "Failed to add stock investment" });
