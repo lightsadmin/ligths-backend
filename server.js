@@ -99,20 +99,12 @@ const goalSchema = new mongoose.Schema({
 
 const Goal = mongoose.model("Goal", goalSchema); // THEN the Goal model is created
 
-const mutualFundSchema = new mongoose.Schema(
-  {
-    scheme_code: { type: String, required: true },
-    isin_div_payout_or_growth: { type: String, required: true },
-    scheme_name: { type: String, required: true },
-    nav: { type: String, required: true },
-    date: { type: String, required: true },
-    lastUpdated: { type: Date, default: Date.now },
-  },
-  {
-    // Create compound index for scheme_code and date for efficient queries
-    indexes: [{ scheme_code: 1, date: -1 }],
-  }
-);
+const mutualFundSchema = new mongoose.Schema({
+  schemeCode: { type: String, required: true, unique: true },
+  schemeName: { type: String, required: true },
+  nav: { type: Number, required: true },
+  lastUpdated: { type: Date, default: Date.now },
+});
 const MutualFund = mongoose.model("MutualFund", mutualFundSchema);
 
 // � Define Stock Transaction Schema
@@ -1553,70 +1545,45 @@ app.get("/test-auth", verifyToken, (req, res) => {
  */
 const fetchAndStoreNAVData = async () => {
   try {
-    console.log("� Starting NAV data fetch from AMFI...");
-
+    console.log("📈 Fetching NAV data from AMFI...");
     const response = await axios.get(
       "https://www.amfiindia.com/spages/NAVAll.txt"
     );
     const lines = response.data.split("\n");
+    const updates = [];
 
-    console.log(`📊 Received ${lines.length} lines from AMFI`);
+    for (const line of lines) {
+      if (line.trim() === "" || line.includes("Scheme Code")) continue;
+      const parts = line.split(";");
+      if (parts.length >= 4) {
+        const schemeCode = parts[0].trim();
+        const schemeName = parts[2].trim();
+        const nav = parseFloat(parts[3].trim());
 
-    const navList = [];
-
-    // Skip the first line (header) and process each line
-    for (let i = 1; i < lines.length; i++) {
-      const line = lines[i].trim();
-      if (!line) continue; // Skip empty lines
-
-      const parts = line.split(";"); // FIXED: AMFI uses semicolon as delimiter, not pipe
-      if (parts.length >= 6) {
-        const navEntry = {
-          scheme_code: parts[0].trim(),
-          isin_div_payout_or_growth: parts[1].trim(),
-          scheme_name: parts[3].trim(),
-          nav: parts[4].trim(),
-          date: parts[5].trim(),
-          lastUpdated: new Date(),
-        };
-
-        // Only add if scheme_code exists and nav is not empty
-        if (navEntry.scheme_code && navEntry.nav && navEntry.nav !== "-") {
-          navList.push(navEntry);
+        if (schemeCode && schemeName && !isNaN(nav) && nav > 0) {
+          updates.push({
+            updateOne: {
+              filter: { schemeCode: schemeCode },
+              update: {
+                $set: { schemeCode, schemeName, nav, lastUpdated: new Date() },
+              },
+              upsert: true,
+            },
+          });
         }
       }
     }
 
-    console.log(`✅ Parsed ${navList.length} valid NAV entries`);
-
-    if (navList.length === 0) {
-      console.log("⚠️ No valid NAV data found");
-      return;
+    if (updates.length > 0) {
+      await MutualFund.bulkWrite(updates);
+      console.log(
+        `✅ NAV data updated successfully. Processed ${updates.length} funds.`
+      );
+    } else {
+      console.log("ℹ️ No new NAV data to update.");
     }
-
-    // Clear existing data before inserting new data
-    await MutualFund.deleteMany({});
-    console.log("🗑️ Cleared existing NAV data");
-
-    // Insert new data using insertMany for better performance
-    const result = await MutualFund.insertMany(navList, { ordered: false });
-    console.log(`✅ Successfully inserted ${result.length} NAV records`);
-
-    // Create indexes for better query performance
-    try {
-      await MutualFund.collection.createIndex({ scheme_code: 1, date: -1 });
-      await MutualFund.collection.createIndex({ scheme_name: 1 });
-    } catch (indexError) {
-      console.log("ℹ️ Indexes might already exist");
-    }
-
-    console.log("🎯 NAV data update completed successfully!");
   } catch (error) {
     console.error("❌ Error fetching NAV data:", error.message);
-    if (error.response) {
-      console.error("Response status:", error.response.status);
-      console.error("Response data:", error.response.data?.substring(0, 200));
-    }
   }
 };
 
@@ -1635,91 +1602,26 @@ fetchAndStoreNAVData();
  */
 app.get("/mutualfunds/companies", async (req, res) => {
   try {
-    console.log("🔍 MutualFunds/companies endpoint called");
-
-    // First check if there's any data in the collection
-    const totalCount = await MutualFund.countDocuments({});
-    console.log(`📊 Total MutualFund documents in DB: ${totalCount}`);
-
-    // Debug: Check a few sample scheme names to understand the data format
-    const sampleDocs = await MutualFund.find({}).limit(5);
-    console.log("📋 Sample scheme names:");
-    sampleDocs.forEach((doc, index) => {
-      console.log(`  ${index + 1}. ${doc.scheme_name}`);
-    });
-
-    if (totalCount === 0) {
-      console.log("⚠️ No mutual fund data found, attempting to fetch...");
-      await fetchAndStoreNAVData();
-
-      // Check again after fetch
-      const newCount = await MutualFund.countDocuments({});
-      console.log(`📊 After fetch attempt - Total documents: ${newCount}`);
-
-      if (newCount === 0) {
-        return res.json([]);
-      }
-    }
-
     const search = req.query.search || "";
     const pipeline = [
       {
         $addFields: {
-          // Extract company name - try different patterns
           companyName: {
             $trim: {
-              input: {
-                $cond: {
-                  if: { $gt: [{ $indexOfBytes: ["$scheme_name", " - "] }, -1] },
-                  // If " - " exists, take everything before it
-                  then: {
-                    $substr: [
-                      "$scheme_name",
-                      0,
-                      { $indexOfBytes: ["$scheme_name", " - "] },
-                    ],
-                  },
-                  // Otherwise, take first few words
-                  else: {
-                    $reduce: {
-                      input: {
-                        $slice: [{ $split: ["$scheme_name", " "] }, 0, 3],
-                      },
-                      initialValue: "",
-                      in: {
-                        $cond: {
-                          if: { $eq: ["$$value", ""] },
-                          then: "$$this",
-                          else: { $concat: ["$$value", " ", "$$this"] },
-                        },
-                      },
-                    },
-                  },
-                },
-              },
+              input: { $arrayElemAt: [{ $split: ["$schemeName", " - "] }, 0] },
             },
           },
         },
       },
-      {
-        $match: {
-          companyName: { $regex: search, $options: "i" },
-          scheme_name: { $exists: true, $ne: "" },
-          nav: { $exists: true, $ne: "-", $ne: "" },
-          companyName: { $ne: "" },
-        },
-      },
+      { $match: { companyName: { $regex: search, $options: "i" } } },
       {
         $group: {
           _id: "$companyName",
           schemes: {
             $push: {
-              // Map backend field names to frontend expected camelCase
-              schemeCode: "$scheme_code",
-              isin_div_payout_or_growth: "$isin_div_payout_or_growth",
-              schemeName: "$scheme_name",
+              schemeCode: "$schemeCode",
+              schemeName: "$schemeName",
               nav: "$nav",
-              date: "$date",
               lastUpdated: "$lastUpdated",
             },
           },
@@ -1735,16 +1637,11 @@ app.get("/mutualfunds/companies", async (req, res) => {
         },
       },
       { $sort: { companyName: 1 } },
-      { $limit: 100 }, // Increase limit to show more companies
     ];
-
     const companies = await MutualFund.aggregate(pipeline);
-    console.log(`📊 Returning ${companies.length} companies to frontend`);
-
     res.json(companies);
   } catch (error) {
-    console.error("❌ Error fetching grouped mutual funds:", error.message);
-    console.error("Full error:", error);
+    console.error("Error fetching grouped mutual funds:", error.message);
     res.status(500).json({ error: "Internal Server Error" });
   }
 });
@@ -1752,7 +1649,6 @@ app.get("/mutualfunds/companies", async (req, res) => {
 /**
  * Get a paginated list of all mutual funds.
  * Supports server-side search by scheme name.
- * Maps field names from backend format to frontend expected camelCase.
  */
 app.get("/mutualfunds", async (req, res) => {
   try {
@@ -1760,28 +1656,17 @@ app.get("/mutualfunds", async (req, res) => {
     const limit = parseInt(req.query.limit) || 20;
     const search = req.query.search || "";
     const query = search
-      ? { scheme_name: { $regex: search, $options: "i" } }
+      ? { schemeName: { $regex: search, $options: "i" } }
       : {};
 
     const totalFunds = await MutualFund.countDocuments(query);
     const funds = await MutualFund.find(query)
-      .sort({ scheme_name: 1 })
+      .sort({ schemeName: 1 })
       .skip((page - 1) * limit)
       .limit(limit);
 
-    // Map field names to frontend expected camelCase
-    const mappedFunds = funds.map((fund) => ({
-      _id: fund._id,
-      schemeCode: fund.scheme_code,
-      isin_div_payout_or_growth: fund.isin_div_payout_or_growth,
-      schemeName: fund.scheme_name,
-      nav: fund.nav,
-      date: fund.date,
-      lastUpdated: fund.lastUpdated,
-    }));
-
     res.json({
-      funds: mappedFunds,
+      funds,
       totalPages: Math.ceil(totalFunds / limit),
       currentPage: page,
       totalFunds,
@@ -1793,29 +1678,16 @@ app.get("/mutualfunds", async (req, res) => {
 
 /**
  * Get details for a single mutual fund by its scheme code.
- * Maps field names from backend format to frontend expected camelCase.
  */
 app.get("/mutualfunds/:schemeCode", async (req, res) => {
   try {
     const fund = await MutualFund.findOne({
-      scheme_code: req.params.schemeCode,
+      schemeCode: req.params.schemeCode,
     });
     if (!fund) {
       return res.status(404).json({ error: "Mutual fund not found" });
     }
-
-    // Map field names to frontend expected camelCase
-    const mappedFund = {
-      _id: fund._id,
-      schemeCode: fund.scheme_code,
-      isin_div_payout_or_growth: fund.isin_div_payout_or_growth,
-      schemeName: fund.scheme_name,
-      nav: fund.nav,
-      date: fund.date,
-      lastUpdated: fund.lastUpdated,
-    };
-
-    res.json(mappedFund);
+    res.json(fund);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -1826,43 +1698,8 @@ app.get("/mutualfunds/:schemeCode", async (req, res) => {
  */
 app.post("/update-nav", async (req, res) => {
   try {
-    console.log("🔄 Manual NAV update triggered");
-    const result = await fetchAndStoreNAVData();
-
-    // Check the count after update
-    const count = await MutualFund.countDocuments({});
-    console.log(`📊 NAV update complete - Total records: ${count}`);
-
-    res.json({
-      message: "NAV data update completed",
-      success: result?.success || true,
-      recordCount: count,
-      details: result?.message || "Update successful",
-    });
-  } catch (error) {
-    console.error("❌ Manual NAV update error:", error);
-    res.status(500).json({
-      error: error.message,
-      success: false,
-    });
-  }
-});
-
-/**
- * Debug endpoint to check MutualFund data status
- */
-app.get("/debug/mutualfunds", async (req, res) => {
-  try {
-    const count = await MutualFund.countDocuments({});
-    const sample = await MutualFund.findOne({});
-    const firstFew = await MutualFund.find({}).limit(3);
-
-    res.json({
-      totalCount: count,
-      sampleRecord: sample,
-      firstThreeRecords: firstFew,
-      timestamp: new Date().toISOString(),
-    });
+    await fetchAndStoreNAVData();
+    res.json({ message: "NAV data updated successfully" });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
