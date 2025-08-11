@@ -1569,7 +1569,7 @@ const fetchAndStoreNAVData = async () => {
       const line = lines[i].trim();
       if (!line) continue; // Skip empty lines
 
-      const parts = line.split("|");
+      const parts = line.split(";"); // FIXED: AMFI uses semicolon as delimiter, not pipe
       if (parts.length >= 6) {
         const navEntry = {
           scheme_code: parts[0].trim(),
@@ -1635,6 +1635,25 @@ fetchAndStoreNAVData();
  */
 app.get("/mutualfunds/companies", async (req, res) => {
   try {
+    console.log("🔍 MutualFunds/companies endpoint called");
+
+    // First check if there's any data in the collection
+    const totalCount = await MutualFund.countDocuments({});
+    console.log(`📊 Total MutualFund documents in DB: ${totalCount}`);
+
+    if (totalCount === 0) {
+      console.log("⚠️ No mutual fund data found, attempting to fetch...");
+      await fetchAndStoreNAVData();
+
+      // Check again after fetch
+      const newCount = await MutualFund.countDocuments({});
+      console.log(`📊 After fetch attempt - Total documents: ${newCount}`);
+
+      if (newCount === 0) {
+        return res.json([]);
+      }
+    }
+
     const search = req.query.search || "";
     const pipeline = [
       {
@@ -1674,10 +1693,14 @@ app.get("/mutualfunds/companies", async (req, res) => {
       },
       { $sort: { companyName: 1 } },
     ];
+
     const companies = await MutualFund.aggregate(pipeline);
+    console.log(`📊 Returning ${companies.length} companies to frontend`);
+
     res.json(companies);
   } catch (error) {
-    console.error("Error fetching grouped mutual funds:", error.message);
+    console.error("❌ Error fetching grouped mutual funds:", error.message);
+    console.error("Full error:", error);
     res.status(500).json({ error: "Internal Server Error" });
   }
 });
@@ -1759,8 +1782,43 @@ app.get("/mutualfunds/:schemeCode", async (req, res) => {
  */
 app.post("/update-nav", async (req, res) => {
   try {
-    await fetchAndStoreNAVData();
-    res.json({ message: "NAV data updated successfully" });
+    console.log("🔄 Manual NAV update triggered");
+    const result = await fetchAndStoreNAVData();
+
+    // Check the count after update
+    const count = await MutualFund.countDocuments({});
+    console.log(`📊 NAV update complete - Total records: ${count}`);
+
+    res.json({
+      message: "NAV data update completed",
+      success: result?.success || true,
+      recordCount: count,
+      details: result?.message || "Update successful",
+    });
+  } catch (error) {
+    console.error("❌ Manual NAV update error:", error);
+    res.status(500).json({
+      error: error.message,
+      success: false,
+    });
+  }
+});
+
+/**
+ * Debug endpoint to check MutualFund data status
+ */
+app.get("/debug/mutualfunds", async (req, res) => {
+  try {
+    const count = await MutualFund.countDocuments({});
+    const sample = await MutualFund.findOne({});
+    const firstFew = await MutualFund.find({}).limit(3);
+
+    res.json({
+      totalCount: count,
+      sampleRecord: sample,
+      firstThreeRecords: firstFew,
+      timestamp: new Date().toISOString(),
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
