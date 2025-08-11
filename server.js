@@ -99,12 +99,20 @@ const goalSchema = new mongoose.Schema({
 
 const Goal = mongoose.model("Goal", goalSchema); // THEN the Goal model is created
 
-const mutualFundSchema = new mongoose.Schema({
-  schemeCode: { type: String, required: true, unique: true },
-  schemeName: { type: String, required: true },
-  nav: { type: Number, required: true },
-  lastUpdated: { type: Date, default: Date.now },
-});
+const mutualFundSchema = new mongoose.Schema(
+  {
+    scheme_code: { type: String, required: true },
+    isin_div_payout_or_growth: { type: String, required: true },
+    scheme_name: { type: String, required: true },
+    nav: { type: String, required: true },
+    date: { type: String, required: true },
+    lastUpdated: { type: Date, default: Date.now },
+  },
+  {
+    // Create compound index for scheme_code and date for efficient queries
+    indexes: [{ scheme_code: 1, date: -1 }],
+  }
+);
 const MutualFund = mongoose.model("MutualFund", mutualFundSchema);
 
 // � Define Stock Transaction Schema
@@ -1545,45 +1553,70 @@ app.get("/test-auth", verifyToken, (req, res) => {
  */
 const fetchAndStoreNAVData = async () => {
   try {
-    console.log("📈 Fetching NAV data from AMFI...");
+    console.log("� Starting NAV data fetch from AMFI...");
+
     const response = await axios.get(
       "https://www.amfiindia.com/spages/NAVAll.txt"
     );
     const lines = response.data.split("\n");
-    const updates = [];
 
-    for (const line of lines) {
-      if (line.trim() === "" || line.includes("Scheme Code")) continue;
-      const parts = line.split(";");
-      if (parts.length >= 4) {
-        const schemeCode = parts[0].trim();
-        const schemeName = parts[2].trim();
-        const nav = parseFloat(parts[3].trim());
+    console.log(`📊 Received ${lines.length} lines from AMFI`);
 
-        if (schemeCode && schemeName && !isNaN(nav) && nav > 0) {
-          updates.push({
-            updateOne: {
-              filter: { schemeCode: schemeCode },
-              update: {
-                $set: { schemeCode, schemeName, nav, lastUpdated: new Date() },
-              },
-              upsert: true,
-            },
-          });
+    const navList = [];
+
+    // Skip the first line (header) and process each line
+    for (let i = 1; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue; // Skip empty lines
+
+      const parts = line.split("|");
+      if (parts.length >= 6) {
+        const navEntry = {
+          scheme_code: parts[0].trim(),
+          isin_div_payout_or_growth: parts[1].trim(),
+          scheme_name: parts[3].trim(),
+          nav: parts[4].trim(),
+          date: parts[5].trim(),
+          lastUpdated: new Date(),
+        };
+
+        // Only add if scheme_code exists and nav is not empty
+        if (navEntry.scheme_code && navEntry.nav && navEntry.nav !== "-") {
+          navList.push(navEntry);
         }
       }
     }
 
-    if (updates.length > 0) {
-      await MutualFund.bulkWrite(updates);
-      console.log(
-        `✅ NAV data updated successfully. Processed ${updates.length} funds.`
-      );
-    } else {
-      console.log("ℹ️ No new NAV data to update.");
+    console.log(`✅ Parsed ${navList.length} valid NAV entries`);
+
+    if (navList.length === 0) {
+      console.log("⚠️ No valid NAV data found");
+      return;
     }
+
+    // Clear existing data before inserting new data
+    await MutualFund.deleteMany({});
+    console.log("🗑️ Cleared existing NAV data");
+
+    // Insert new data using insertMany for better performance
+    const result = await MutualFund.insertMany(navList, { ordered: false });
+    console.log(`✅ Successfully inserted ${result.length} NAV records`);
+
+    // Create indexes for better query performance
+    try {
+      await MutualFund.collection.createIndex({ scheme_code: 1, date: -1 });
+      await MutualFund.collection.createIndex({ scheme_name: 1 });
+    } catch (indexError) {
+      console.log("ℹ️ Indexes might already exist");
+    }
+
+    console.log("🎯 NAV data update completed successfully!");
   } catch (error) {
     console.error("❌ Error fetching NAV data:", error.message);
+    if (error.response) {
+      console.error("Response status:", error.response.status);
+      console.error("Response data:", error.response.data?.substring(0, 200));
+    }
   }
 };
 
@@ -1608,7 +1641,7 @@ app.get("/mutualfunds/companies", async (req, res) => {
         $addFields: {
           companyName: {
             $trim: {
-              input: { $arrayElemAt: [{ $split: ["$schemeName", " - "] }, 0] },
+              input: { $arrayElemAt: [{ $split: ["$scheme_name", " - "] }, 0] },
             },
           },
         },
@@ -1619,9 +1652,11 @@ app.get("/mutualfunds/companies", async (req, res) => {
           _id: "$companyName",
           schemes: {
             $push: {
-              schemeCode: "$schemeCode",
-              schemeName: "$schemeName",
+              scheme_code: "$scheme_code",
+              isin_div_payout_or_growth: "$isin_div_payout_or_growth",
+              scheme_name: "$scheme_name",
               nav: "$nav",
+              date: "$date",
               lastUpdated: "$lastUpdated",
             },
           },
@@ -1656,12 +1691,12 @@ app.get("/mutualfunds", async (req, res) => {
     const limit = parseInt(req.query.limit) || 20;
     const search = req.query.search || "";
     const query = search
-      ? { schemeName: { $regex: search, $options: "i" } }
+      ? { scheme_name: { $regex: search, $options: "i" } }
       : {};
 
     const totalFunds = await MutualFund.countDocuments(query);
     const funds = await MutualFund.find(query)
-      .sort({ schemeName: 1 })
+      .sort({ scheme_name: 1 })
       .skip((page - 1) * limit)
       .limit(limit);
 
@@ -2815,7 +2850,10 @@ app.get("/api/stock-investments", verifyToken, async (req, res) => {
  */
 app.post("/api/stock-investments", verifyToken, async (req, res) => {
   try {
-    console.log("💰 Creating stock investment for user:", req.user.userName);
+    console.log(
+      "💰 Creating/updating stock investment for user:",
+      req.user.userName
+    );
     console.log("💰 Received stock investment data:", req.body);
 
     const {
@@ -2836,32 +2874,125 @@ app.post("/api/stock-investments", verifyToken, async (req, res) => {
       });
     }
 
-    const newStockInvestment = new Investment({
-      name,
-      amount: parseFloat(amount),
-      currentAmount: parseFloat(amount),
-      interestRate: 0, // Stocks don't have fixed interest rate
-      investmentType: "Stock",
-      startDate: startDate ? new Date(startDate) : new Date(),
-      description:
-        description ||
-        `${stockQuantity} shares of ${stockSymbol} at $${stockPrice} per share`,
-      stockSymbol: stockSymbol.toUpperCase(),
-      stockQuantity: parseFloat(stockQuantity),
-      stockPrice: parseFloat(stockPrice),
-      goalId: goalId || null,
+    const symbolUpper = stockSymbol.toUpperCase();
+    const quantityNum = parseFloat(stockQuantity);
+    const priceNum = parseFloat(stockPrice);
+    const amountNum = parseFloat(amount);
+
+    // Check if there's already an existing stock investment for this symbol
+    const existingInvestment = await Investment.findOne({
       userName: req.user.userName,
+      stockSymbol: symbolUpper,
+      investmentType: "Stock",
     });
 
-    await newStockInvestment.save();
+    // Validate sell transactions
+    if (
+      quantityNum < 0 &&
+      (!existingInvestment ||
+        existingInvestment.stockQuantity < Math.abs(quantityNum))
+    ) {
+      return res.status(400).json({
+        error: `Cannot sell ${Math.abs(quantityNum)} shares. You only own ${
+          existingInvestment ? existingInvestment.stockQuantity : 0
+        } shares of ${symbolUpper}.`,
+      });
+    }
 
-    console.log(
-      "✅ Stock investment created successfully:",
-      newStockInvestment._id
-    );
-    res.status(201).json(newStockInvestment);
+    if (existingInvestment) {
+      // Update existing investment
+      const newTotalQuantity = existingInvestment.stockQuantity + quantityNum;
+
+      // Handle sell transactions (negative quantity)
+      if (newTotalQuantity <= 0) {
+        // If selling all or more than owned, delete the investment
+        await Investment.findByIdAndDelete(existingInvestment._id);
+        console.log(
+          "✅ Stock investment deleted (sold all shares):",
+          existingInvestment._id
+        );
+        res.status(200).json({
+          message: "Stock investment deleted - all shares sold",
+          deletedId: existingInvestment._id,
+        });
+      } else {
+        // Partial sell or additional buy
+        const newTotalAmount =
+          quantityNum > 0
+            ? existingInvestment.amount + amountNum // Buy: add amount
+            : existingInvestment.amount -
+              existingInvestment.stockPrice * Math.abs(quantityNum); // Sell: subtract based on current average price
+
+        const newAveragePrice =
+          quantityNum > 0
+            ? newTotalAmount / newTotalQuantity // Buy: calculate new average
+            : existingInvestment.stockPrice; // Sell: keep same average price
+
+        existingInvestment.stockQuantity = newTotalQuantity;
+        existingInvestment.amount = newTotalAmount;
+        existingInvestment.currentAmount = newTotalAmount;
+        existingInvestment.stockPrice = newAveragePrice;
+        existingInvestment.description = `${newTotalQuantity} shares of ${symbolUpper} at average price ${newAveragePrice.toFixed(
+          2
+        )} per share${
+          goalId && goalId !== existingInvestment.goalId
+            ? ` - Linked to goal`
+            : ""
+        }`;
+
+        // Update goal if provided and different
+        if (goalId && goalId !== existingInvestment.goalId) {
+          existingInvestment.goalId = goalId;
+        }
+
+        await existingInvestment.save();
+
+        console.log(
+          "✅ Stock investment updated successfully:",
+          existingInvestment._id,
+          "New quantity:",
+          newTotalQuantity
+        );
+        res.status(200).json(existingInvestment);
+      }
+    } else {
+      // Trying to create new investment
+      if (quantityNum < 0) {
+        return res.status(400).json({
+          error: `Cannot sell ${Math.abs(
+            quantityNum
+          )} shares of ${symbolUpper}. You don't own any shares of this stock.`,
+        });
+      }
+
+      // Create new investment (only for buy transactions)
+      const newStockInvestment = new Investment({
+        name,
+        amount: amountNum,
+        currentAmount: amountNum,
+        interestRate: 0, // Stocks don't have fixed interest rate
+        investmentType: "Stock",
+        startDate: startDate ? new Date(startDate) : new Date(),
+        description:
+          description ||
+          `${quantityNum} shares of ${symbolUpper} at $${priceNum} per share`,
+        stockSymbol: symbolUpper,
+        stockQuantity: quantityNum,
+        stockPrice: priceNum,
+        goalId: goalId || null,
+        userName: req.user.userName,
+      });
+
+      await newStockInvestment.save();
+
+      console.log(
+        "✅ New stock investment created successfully:",
+        newStockInvestment._id
+      );
+      res.status(201).json(newStockInvestment);
+    }
   } catch (err) {
-    console.error("❌ Error creating stock investment:", err);
+    console.error("❌ Error creating/updating stock investment:", err);
     res
       .status(500)
       .json({ error: err.message || "Failed to add stock investment" });

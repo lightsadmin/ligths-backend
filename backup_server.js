@@ -4,16 +4,18 @@ const mongoose = require("mongoose");
 const cors = require("cors");
 const bodyParser = require("body-parser");
 const bcrypt = require("bcryptjs");
-const jwt = require("jsonwebtoken");
+const jwt = require("jsonwebtoken"); //n
 const axios = require("axios");
 const cron = require("node-cron");
+// const nodemailer = require("nodemailer"); // Removed - no longer needed
+// const crypto = require("crypto"); // Removed - no longer needed
 const ObjectId = mongoose.Types.ObjectId;
 
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET || "mysecretkey";
 const MONGO_URI =
   process.env.MONGO_URI ||
-  "mongodb+srv://subikshapc:dVje83Q4uKgXM6RS@ligths.tncb6.mongodb.net/?retryWrites=true&w=majority&appName=Ligths";
+  "mongodb+srv://subikshapc:<db_password>@ligths.tncb6.mongodb.net/?retryWrites=true&w=majority&appName=Ligths";
 
 const app = express();
 app.use(
@@ -27,7 +29,7 @@ app.use(bodyParser.json());
 
 // 🔹 **MongoDB Connection**
 mongoose
-  .connect(MONGO_URI)
+  .connect(process.env.MONGO_URI)
   .then(async () => {
     console.log("✅ Connected to MongoDB Atlas");
     // Fix any problematic indexes in the Goal collection
@@ -53,7 +55,7 @@ const investmentSchema = new mongoose.Schema({
   amount: { type: Number, required: true }, // Initial investment amount
   currentAmount: { type: Number, required: true }, // Current value with interest
   interestRate: { type: Number, required: true }, // Annual interest rate (%)
-  investmentType: { type: String, required: true }, // e.g., "Fixed Deposit", "Mutual Fund", etc.
+  investmentType: { type: String, required: true }, // e.g., "Fixed Deposit", "Mutual Fund", "Stock", etc.
   startDate: { type: Date, default: Date.now },
   maturityDate: { type: Date },
   lastInterestUpdate: { type: Date, default: Date.now },
@@ -62,6 +64,10 @@ const investmentSchema = new mongoose.Schema({
   monthlyDeposit: { type: Number }, // Specific for Recurring Deposit
   duration: { type: Number }, // Specific for Recurring Deposit
   goalId: { type: String }, // Add goalId field
+  // Stock-specific fields
+  stockSymbol: { type: String }, // e.g., "AAPL", "MSFT"
+  stockQuantity: { type: Number }, // Number of shares (can be negative for sells)
+  stockPrice: { type: Number }, // Price per share when bought/sold
 });
 
 const Investment = mongoose.model("Investment", investmentSchema);
@@ -93,17 +99,33 @@ const goalSchema = new mongoose.Schema({
 
 const Goal = mongoose.model("Goal", goalSchema); // THEN the Goal model is created
 
-// 📌 Define Mutual Fund NAV Schema
 const mutualFundSchema = new mongoose.Schema({
   schemeCode: { type: String, required: true, unique: true },
   schemeName: { type: String, required: true },
   nav: { type: Number, required: true },
   lastUpdated: { type: Date, default: Date.now },
 });
-
 const MutualFund = mongoose.model("MutualFund", mutualFundSchema);
 
-// 🔹 **Fix Goal Collection Indexes**
+// � Define Stock Transaction Schema
+const stockTransactionSchema = new mongoose.Schema({
+  userName: { type: String, required: true },
+  symbol: { type: String, required: true }, // e.g., "AAPL"
+  companyName: { type: String, required: true },
+  type: { type: String, required: true, enum: ["buy", "sell"] },
+  quantity: { type: Number, required: true },
+  price: { type: Number, required: true }, // Price per share
+  total: { type: Number, required: true }, // Total transaction value
+  date: { type: String, required: true }, // Date in YYYY-MM-DD format
+  timestamp: { type: Date, default: Date.now },
+});
+
+const StockTransaction = mongoose.model(
+  "StockTransaction",
+  stockTransactionSchema
+);
+
+// �🔹 **Fix Goal Collection Indexes**
 const fixGoalIndexes = async () => {
   try {
     const indexes = await Goal.collection.getIndexes();
@@ -148,6 +170,7 @@ const createUserModel = (userName) => {
     retirementAge: { type: Number, required: true },
     phoneNumber: { type: String, required: true },
     country: { type: String, required: true },
+    securityPin: { type: String, required: true }, // For forgot password functionality
     transactions: [
       {
         name: { type: String, required: true },
@@ -185,13 +208,14 @@ app.post("/api/register", async (req, res) => {
     retirementAge,
     phoneNumber,
     country,
+    securityPin,
   } = req.body;
 
   try {
-    if (!userName || !email || !password) {
-      return res
-        .status(400)
-        .json({ error: "Username, email, and password are required." });
+    if (!userName || !email || !password || !securityPin) {
+      return res.status(400).json({
+        error: "Username, email, password, and security PIN are required.",
+      });
     }
 
     // Check if the username already exists in the database
@@ -206,8 +230,9 @@ app.post("/api/register", async (req, res) => {
       return res.status(400).json({ error: "Username already taken!" });
     }
 
-    // Create a hashed password
+    // Create a hashed password and security PIN
     const hashedPassword = await bcrypt.hash(password, 10);
+    const hashedSecurityPin = await bcrypt.hash(securityPin, 10);
 
     // Create User Model for the new user
     const UserModel = createUserModel(userName);
@@ -221,66 +246,7 @@ app.post("/api/register", async (req, res) => {
       retirementAge,
       phoneNumber,
       country,
-    });
-
-    // Save User in a new collection with username
-    await newUser.save();
-
-    res.status(201).json({ message: "User registered successfully!" });
-  } catch (error) {
-    console.error("Error during registration:", error);
-    res.status(500).json({ error: "Internal Server Error" });
-  }
-});
-
-app.post("/api/register", async (req, res) => {
-  console.log("✅ Register route hit!");
-  const {
-    firstName,
-    lastName,
-    userName,
-    email,
-    password,
-    age,
-    retirementAge,
-    phoneNumber,
-    country,
-  } = req.body;
-
-  try {
-    if (!userName || !email || !password) {
-      return res
-        .status(400)
-        .json({ error: "Username, email, and password are required." });
-    }
-
-    // Check if the username already exists in the database
-    const collections = await mongoose.connection.db
-      .listCollections()
-      .toArray();
-    const existingCollection = collections.some(
-      (col) => col.name === `${userName}`
-    );
-
-    if (existingCollection) {
-      return res.status(400).json({ error: "Username already taken!" });
-    }
-
-    // Create a hashed password
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    // Create User Model for the new user
-    const UserModel = createUserModel(userName);
-    const newUser = new UserModel({
-      firstName,
-      lastName,
-      userName,
-      email,
-      password: hashedPassword,
-      age,
-      retirementAge,
-      phoneNumber,
-      country,
+      securityPin: hashedSecurityPin,
     });
 
     // Save User in a new collection with username
@@ -435,17 +401,54 @@ app.post("/api/login", async (req, res) => {
         .json({ error: "Username and password are required." });
     }
 
-    // Create UserModel for the given username
-    const UserModel = createUserModel(userName);
-    const user = await UserModel.findOne({ userName });
+    // Check if userName is actually an email address
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const isEmail = emailRegex.test(userName);
 
-    if (!user) {
+    let foundUser = null;
+    let UserModel = null;
+
+    if (isEmail) {
+      // If it's an email, search across all collections like in forgot password
+      console.log(`🔍 Login with email: ${userName}`);
+      const collections = await mongoose.connection.db
+        .listCollections()
+        .toArray();
+
+      for (const collection of collections) {
+        const collectionName = collection.name;
+        if (collectionName.startsWith("system.")) continue;
+
+        try {
+          const TempUserModel = createUserModel(collectionName);
+          const user = await TempUserModel.findOne({ email: userName });
+
+          if (user) {
+            foundUser = user;
+            UserModel = TempUserModel;
+            console.log(
+              `🔍 Found user by email: ${user.userName}, Email: ${user.email}`
+            );
+            break;
+          }
+        } catch (err) {
+          continue;
+        }
+      }
+    } else {
+      // If it's a username, use the original logic
+      console.log(`🔍 Login with username: ${userName}`);
+      UserModel = createUserModel(userName);
+      foundUser = await UserModel.findOne({ userName });
+    }
+
+    if (!foundUser) {
       console.log("❗ User not found!");
       return res.status(404).json({ error: "Invalid username or password." });
     }
 
     // ✅ Compare the provided password with the hashed password
-    const isMatch = await bcrypt.compare(password, user.password);
+    const isMatch = await bcrypt.compare(password, foundUser.password);
     if (!isMatch) {
       console.log("❗ Invalid password.");
       return res.status(401).json({ error: "Invalid username or password." });
@@ -453,8 +456,8 @@ app.post("/api/login", async (req, res) => {
 
     // ✅ Generate JWT Token
     const payload = {
-      id: user._id, // Keep user._id in payload for consistency if needed elsewhere, but use userName for investment lookup
-      userName: user.userName,
+      id: foundUser._id, // Keep user._id in payload for consistency if needed elsewhere, but use userName for investment lookup
+      userName: foundUser.userName,
     };
 
     console.log("🔐 JWT Payload:", payload);
@@ -468,18 +471,280 @@ app.post("/api/login", async (req, res) => {
       message: "Login successful!",
       token,
       user: {
-        firstName: user.firstName,
-        lastName: user.lastName,
-        username: user.userName,
-        email: user.email,
-        age: user.age,
-        retirementAge: user.retirementAge,
-        phoneNumber: user.phoneNumber,
-        country: user.country,
+        firstName: foundUser.firstName,
+        lastName: foundUser.lastName,
+        username: foundUser.userName,
+        email: foundUser.email,
+        age: foundUser.age,
+        retirementAge: foundUser.retirementAge,
+        phoneNumber: foundUser.phoneNumber,
+        country: foundUser.country,
       },
     });
   } catch (error) {
     console.error("❌ Error during login:", error);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+// � **Forgot Password Route (Security PIN based)**
+app.post("/api/forgot-password", async (req, res) => {
+  console.log("🔐 Forgot password route hit!");
+  const { email, securityPin, newPassword } = req.body;
+
+  try {
+    // Input validation
+    if (!email || !securityPin || !newPassword) {
+      return res.status(400).json({
+        error: "Email, security PIN, and new password are required.",
+      });
+    }
+
+    // Password strength validation
+    if (newPassword.length < 6) {
+      return res.status(400).json({
+        error: "New password must be at least 6 characters long.",
+      });
+    }
+
+    // Find user by email - email should be unique per user
+    let foundUser = null;
+    let userModel = null;
+
+    const collections = await mongoose.connection.db
+      .listCollections()
+      .toArray();
+
+    for (const collection of collections) {
+      const collectionName = collection.name;
+
+      // Skip system collections
+      if (collectionName.startsWith("system.")) continue;
+
+      try {
+        const UserModel = createUserModel(collectionName);
+        const user = await UserModel.findOne({ email: email });
+
+        if (user) {
+          foundUser = user;
+          userModel = UserModel;
+          console.log(
+            `🔍 Found user: ${user.userName}, Email: ${
+              user.email
+            }, Has SecurityPin: ${!!user.securityPin}, SecurityPin Value: "${
+              user.securityPin
+            }", SecurityPin Type: ${typeof user.securityPin}`
+          );
+          break; // Email is unique, so we can break after finding the user
+        }
+      } catch (err) {
+        // Skip collections that might not be user collections
+        continue;
+      }
+    }
+
+    if (!foundUser) {
+      console.log(`❌ No user found with email: ${email}`);
+      return res
+        .status(404)
+        .json({ error: "No account found with this email address." });
+    }
+
+    // Check if user has a security PIN set
+    if (!foundUser.securityPin) {
+      console.log(
+        `⚠️ User ${foundUser.userName} (${email}) exists but has no security PIN. Updating with provided PIN...`
+      );
+
+      // Hash the provided security PIN and save it to the user
+      const hashedSecurityPin = await bcrypt.hash(securityPin, 10);
+
+      // Update user with security PIN
+      await userModel.findByIdAndUpdate(foundUser._id, {
+        securityPin: hashedSecurityPin,
+      });
+
+      console.log(
+        `✅ Security PIN added for user: ${foundUser.userName} (${foundUser.email})`
+      );
+
+      // Continue with password reset process
+      foundUser.securityPin = hashedSecurityPin; // Update local object
+    }
+
+    console.log(
+      `✅ User ${foundUser.userName} found with security PIN. Proceeding with verification...`
+    );
+
+    // Verify security PIN
+    const isPinValid = await bcrypt.compare(securityPin, foundUser.securityPin);
+    if (!isPinValid) {
+      return res.status(401).json({ error: "Invalid security PIN." });
+    }
+
+    // Hash the new password
+    const hashedNewPassword = await bcrypt.hash(newPassword, 10);
+
+    // Update user password
+    await userModel.findByIdAndUpdate(foundUser._id, {
+      password: hashedNewPassword,
+    });
+
+    console.log(
+      `✅ Password reset successful for user: ${foundUser.userName} (${foundUser.email})`
+    );
+
+    res.status(200).json({
+      message:
+        "Password reset successful! You can now log in with your new password.",
+    });
+  } catch (error) {
+    console.error("❌ Error in forgot password:", error);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+// �📧 **Google Authentication Route**
+app.post("/api/google-auth", async (req, res) => {
+  console.log("🔐 Google auth route hit!");
+  const { googleId, email, name, picture } = req.body;
+
+  try {
+    if (!googleId || !email || !name) {
+      return res
+        .status(400)
+        .json({ error: "Missing required Google authentication data." });
+    }
+
+    // Check if user exists by email across all collections
+    const collections = await mongoose.connection.db
+      .listCollections()
+      .toArray();
+    let foundUser = null;
+    let userModel = null;
+
+    for (const collection of collections) {
+      const collectionName = collection.name;
+
+      // Skip system collections
+      if (collectionName.startsWith("system.")) continue;
+
+      try {
+        const UserModel = createUserModel(collectionName);
+        const user = await UserModel.findOne({ email });
+
+        if (user) {
+          foundUser = user;
+          userModel = UserModel;
+          break;
+        }
+      } catch (err) {
+        // Skip collections that might not be user collections
+        continue;
+      }
+    }
+
+    if (foundUser) {
+      // User exists, log them in
+      const payload = {
+        id: foundUser._id,
+        userName: foundUser.userName,
+      };
+
+      const token = jwt.sign(payload, JWT_SECRET, { expiresIn: "7d" });
+
+      console.log(
+        "✅ Google login successful for existing user:",
+        foundUser.userName
+      );
+      return res.status(200).json({
+        message: "Google login successful!",
+        token,
+        user: {
+          firstName: foundUser.firstName,
+          lastName: foundUser.lastName,
+          username: foundUser.userName,
+          email: foundUser.email,
+          age: foundUser.age,
+          retirementAge: foundUser.retirementAge,
+          phoneNumber: foundUser.phoneNumber,
+          country: foundUser.country,
+        },
+      });
+    } else {
+      // User doesn't exist, need to create account
+      // For Google auth, we'll need some default values
+      const nameParts = name.split(" ");
+      const firstName = nameParts[0] || name;
+      const lastName = nameParts.slice(1).join(" ") || "";
+
+      // Generate username from email
+      const baseUsername = email
+        .split("@")[0]
+        .toLowerCase()
+        .replace(/[^a-z0-9]/g, "");
+      let userName = baseUsername;
+
+      // Make sure username is unique
+      let counter = 1;
+      while (true) {
+        const collections = await mongoose.connection.db
+          .listCollections()
+          .toArray();
+        const existingCollection = collections.some(
+          (col) => col.name === userName
+        );
+
+        if (!existingCollection) break;
+
+        userName = `${baseUsername}${counter}`;
+        counter++;
+      }
+
+      // Create new user with Google data
+      const UserModel = createUserModel(userName);
+      const newUser = new UserModel({
+        firstName,
+        lastName,
+        userName,
+        email,
+        password: await bcrypt.hash(googleId, 10), // Use googleId as password (they'll use Google login)
+        age: 25, // Default age
+        retirementAge: 65, // Default retirement age
+        phoneNumber: "", // Empty for now
+        country: "Unknown", // Default country
+      });
+
+      await newUser.save();
+
+      const payload = {
+        id: newUser._id,
+        userName: newUser.userName,
+      };
+
+      const token = jwt.sign(payload, JWT_SECRET, { expiresIn: "7d" });
+
+      console.log(
+        "✅ Google signup successful for new user:",
+        newUser.userName
+      );
+      return res.status(201).json({
+        message: "Google signup successful!",
+        token,
+        user: {
+          firstName: newUser.firstName,
+          lastName: newUser.lastName,
+          username: newUser.userName,
+          email: newUser.email,
+          age: newUser.age,
+          retirementAge: newUser.retirementAge,
+          phoneNumber: newUser.phoneNumber,
+          country: newUser.country,
+        },
+      });
+    }
+  } catch (error) {
+    console.error("❌ Error in Google authentication:", error);
     res.status(500).json({ error: "Internal Server Error" });
   }
 });
@@ -595,6 +860,88 @@ app.post("/api/check-email", async (req, res) => {
     res.json({ exists: emailExists });
   } catch (error) {
     console.error("Error checking email:", error);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+// 📌 **Add Security PIN to Existing User (Temporary Migration Endpoint)**
+app.post("/api/add-security-pin", async (req, res) => {
+  console.log("🔐 Add security PIN route hit!");
+  const { email, securityPin } = req.body;
+
+  try {
+    // Input validation
+    if (!email || !securityPin) {
+      return res.status(400).json({
+        error: "Email and security PIN are required.",
+      });
+    }
+
+    // Find user by email across all collections
+    let foundUser = null;
+    let userModel = null;
+
+    const collections = await mongoose.connection.db
+      .listCollections()
+      .toArray();
+
+    for (const collection of collections) {
+      const collectionName = collection.name;
+
+      // Skip system collections
+      if (collectionName.startsWith("system.")) continue;
+
+      try {
+        const UserModel = createUserModel(collectionName);
+        const user = await UserModel.findOne({ email: email });
+
+        if (user) {
+          foundUser = user;
+          userModel = UserModel;
+          console.log(`🔍 Found user: ${user.userName}, Email: ${user.email}`);
+          break;
+        }
+      } catch (err) {
+        // Skip collections that might not be user collections
+        continue;
+      }
+    }
+
+    if (!foundUser) {
+      console.log(`❌ No user found with email: ${email}`);
+      return res
+        .status(404)
+        .json({ error: "No account found with this email address." });
+    }
+
+    // Check if user already has a security PIN
+    if (foundUser.securityPin) {
+      console.log(
+        `⚠️ User ${foundUser.userName} (${email}) already has a security PIN`
+      );
+      return res.status(400).json({
+        error: "This account already has a security PIN set.",
+      });
+    }
+
+    // Hash the security PIN
+    const hashedSecurityPin = await bcrypt.hash(securityPin, 10);
+
+    // Update user with security PIN
+    await userModel.findByIdAndUpdate(foundUser._id, {
+      securityPin: hashedSecurityPin,
+    });
+
+    console.log(
+      `✅ Security PIN added successfully for user: ${foundUser.userName} (${foundUser.email})`
+    );
+
+    res.status(200).json({
+      message:
+        "Security PIN added successfully! You can now use the forgot password feature.",
+    });
+  } catch (error) {
+    console.error("❌ Error adding security PIN:", error);
     res.status(500).json({ error: "Internal Server Error" });
   }
 });
@@ -1135,70 +1482,6 @@ app.get("/investments/:username/by-goal/:goalId", async (req, res) => {
   }
 });
 
-// 📌 **Investment Routes**
-
-// --- FIX STARTS HERE ---
-// Add a new investment (REWRITTEN FOR CLARITY AND SECURITY)
-app.post("/investment", verifyToken, async (req, res) => {
-  try {
-    console.log("💰 Creating investment for user:", req.user.userName);
-    console.log("💰 Received Investment data:", req.body);
-
-    // Explicitly pull only the fields you expect from the body
-    const {
-      name,
-      amount,
-      interestRate,
-      investmentType,
-      maturityDate,
-      description,
-      goalId, // Explicitly get the goalId
-      compoundingFrequency,
-      monthlyDeposit,
-      duration,
-    } = req.body;
-
-    // Basic validation
-    if (
-      !name ||
-      !amount ||
-      interestRate === undefined ||
-      interestRate === null ||
-      !investmentType
-    ) {
-      return res
-        .status(400)
-        .json({ error: "Missing required investment fields." });
-    }
-
-    const newInvestment = new Investment({
-      name,
-      amount: parseFloat(amount),
-      currentAmount: parseFloat(amount), // currentAmount is same as initial amount
-      interestRate: parseFloat(interestRate),
-      investmentType,
-      startDate: new Date(),
-      maturityDate,
-      description,
-      goalId, // Pass the extracted goalId
-      compoundingFrequency,
-      monthlyDeposit,
-      duration,
-      userName: req.user.userName, // Add userName from the verified token
-    });
-
-    await newInvestment.save();
-    console.log("✅ Investment created successfully:", newInvestment._id);
-
-    // Respond with 201 Created status and the new investment object
-    res.status(201).json(newInvestment);
-  } catch (err) {
-    console.error("❌ Error creating investment:", err);
-    res.status(500).json({ error: err.message || "Failed to add investment" });
-  }
-});
-// --- FIX ENDS HERE ---
-
 // 📌 Test endpoint to debug token and user issues
 app.get("/test-token", verifyToken, async (req, res) => {
   try {
@@ -1254,196 +1537,124 @@ app.get("/test-auth", verifyToken, (req, res) => {
   });
 });
 
-// Get all investments
-app.get("/investments", verifyToken, async (req, res) => {
-  try {
-    console.log("📊 Getting investments for user:", req.user.userName); // Changed from req.user.id
-    console.log("📊 User object:", req.user);
+// --- NAV Fetching and Mutual Fund API ---
 
-    const userName = req.user.userName; // Changed from userId = new mongoose.Types.ObjectId(req.user.id);
-    const investments = await Investment.find({ userName: userName }); // Changed from user: userId
-    console.log("📊 Found investments:", investments.length);
-
-    res.json(investments);
-  } catch (err) {
-    console.error("❌ Error fetching investments:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Update investment
-app.put("/investment/:id", verifyToken, async (req, res) => {
-  try {
-    const userName = req.user.userName; // Changed from userId = new mongoose.Types.ObjectId(req.user.id);
-    const investment = await Investment.findOne({
-      _id: req.params.id,
-      userName: userName,
-    }); // Changed from user: userId
-
-    if (!investment) {
-      return res
-        .status(404)
-        .json({ error: "Investment not found or not authorized" });
-    }
-
-    const updatedInvestment = await Investment.findByIdAndUpdate(
-      req.params.id,
-      req.body,
-      { new: true }
-    );
-    res.json(updatedInvestment);
-  } catch (err) {
-    res.status(500).json(err);
-  }
-});
-
-// Delete investment
-app.delete("/investment/:id", verifyToken, async (req, res) => {
-  try {
-    const userName = req.user.userName; // Changed from userId = new mongoose.Types.ObjectId(req.user.id);
-    const investment = await Investment.findOne({
-      _id: req.params.id,
-      userName: userName,
-    }); // Changed from user: userId
-
-    if (!investment) {
-      return res
-        .status(404)
-        .json({ error: "Investment not found or not authorized" });
-    }
-
-    await Investment.findByIdAndDelete(req.params.id);
-    res.json({ message: "Investment deleted" });
-  } catch (err) {
-    res.status(500).json(err);
-  }
-});
-
-// Manually trigger interest calculation (for testing)
-app.post("/calculate-interest", verifyToken, async (req, res) => {
-  try {
-    await updateDailyInterest();
-    res.json({ message: "Interest calculation triggered successfully" });
-  } catch (err) {
-    res.status(500).json(err);
-  }
-});
-
-// 🔹 **Fetch NAV Data from AMFI**
+/**
+ * Fetches NAV data from AMFI and updates the database efficiently.
+ * This function now uses bulkWrite for a massive performance improvement.
+ */
 const fetchAndStoreNAVData = async () => {
   try {
     console.log("📈 Fetching NAV data from AMFI...");
     const response = await axios.get(
       "https://www.amfiindia.com/spages/NAVAll.txt"
     );
-    const data = response.data;
-
-    // Parse the NAV data
-    const lines = data.split("\n");
-    let foundData = false;
+    const lines = response.data.split("\n");
+    const updates = [];
 
     for (const line of lines) {
-      if (line.trim() === "") continue;
-
-      // Skip header lines until we find actual data
-      if (
-        line.includes("Scheme Code") ||
-        line.includes("ISIN") ||
-        line.includes("Open Ended")
-      ) {
-        foundData = true;
-        continue;
-      }
-
-      if (!foundData) continue;
-
-      // Parse each line: SchemeCode;ISINDivPayoutISINGrowth;SchemeName;NetAssetValue;RepurchasePrice;SalePrice;Date
+      if (line.trim() === "" || line.includes("Scheme Code")) continue;
       const parts = line.split(";");
       if (parts.length >= 4) {
         const schemeCode = parts[0].trim();
         const schemeName = parts[2].trim();
         const nav = parseFloat(parts[3].trim());
 
-        // Skip invalid entries
-        if (!schemeCode || !schemeName || isNaN(nav) || nav <= 0) continue;
-
-        // Update or create mutual fund entry
-        await MutualFund.findOneAndUpdate(
-          { schemeCode: schemeCode },
-          {
-            schemeCode: schemeCode,
-            schemeName: schemeName,
-            nav: nav,
-            lastUpdated: new Date(),
-          },
-          { upsert: true, new: true }
-        );
+        if (schemeCode && schemeName && !isNaN(nav) && nav > 0) {
+          updates.push({
+            updateOne: {
+              filter: { schemeCode: schemeCode },
+              update: {
+                $set: { schemeCode, schemeName, nav, lastUpdated: new Date() },
+              },
+              upsert: true,
+            },
+          });
+        }
       }
     }
 
-    console.log("✅ NAV data updated successfully");
+    if (updates.length > 0) {
+      await MutualFund.bulkWrite(updates);
+      console.log(
+        `✅ NAV data updated successfully. Processed ${updates.length} funds.`
+      );
+    } else {
+      console.log("ℹ️ No new NAV data to update.");
+    }
   } catch (error) {
     console.error("❌ Error fetching NAV data:", error.message);
   }
 };
 
-// 🔹 **Schedule Daily NAV Update**
-// Run every day at 9:15 PM (when AMFI typically updates NAV)
-cron.schedule("15 21 * * *", fetchAndStoreNAVData);
-
+// Schedule daily NAV update at 9:15 PM India Time
+cron.schedule("15 21 * * *", fetchAndStoreNAVData, {
+  timezone: "Asia/Kolkata",
+});
 // Initial fetch on server start
 fetchAndStoreNAVData();
 
-// 🔹 **Mutual Fund API Endpoints**
+// --- Mutual Fund API Endpoints ---
 
-// Get all mutual funds with pagination
+/**
+ * NEW: Get all mutual funds grouped by company.
+ * Supports server-side search by company name.
+ */
+app.get("/mutualfunds/companies", async (req, res) => {
+  try {
+    const search = req.query.search || "";
+    const pipeline = [
+      {
+        $addFields: {
+          companyName: {
+            $trim: {
+              input: { $arrayElemAt: [{ $split: ["$schemeName", " - "] }, 0] },
+            },
+          },
+        },
+      },
+      { $match: { companyName: { $regex: search, $options: "i" } } },
+      {
+        $group: {
+          _id: "$companyName",
+          schemes: {
+            $push: {
+              schemeCode: "$schemeCode",
+              schemeName: "$schemeName",
+              nav: "$nav",
+              lastUpdated: "$lastUpdated",
+            },
+          },
+          lastUpdated: { $max: "$lastUpdated" },
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          companyName: "$_id",
+          schemes: "$schemes",
+          lastUpdated: "$lastUpdated",
+        },
+      },
+      { $sort: { companyName: 1 } },
+    ];
+    const companies = await MutualFund.aggregate(pipeline);
+    res.json(companies);
+  } catch (error) {
+    console.error("Error fetching grouped mutual funds:", error.message);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+/**
+ * Get a paginated list of all mutual funds.
+ * Supports server-side search by scheme name.
+ */
 app.get("/mutualfunds", async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 20;
     const search = req.query.search || "";
-
-    // Check if MongoDB is connected
-    if (mongoose.connection.readyState !== 1) {
-      // Return mock data when MongoDB is not connected
-      const mockFunds = [
-        {
-          schemeCode: "120503",
-          schemeName:
-            "Aditya Birla Sun Life Frontline Equity Fund - Direct Plan - Growth",
-          nav: 587.23,
-          lastUpdated: new Date(),
-        },
-        {
-          schemeCode: "120504",
-          schemeName:
-            "Aditya Birla Sun Life Tax Relief 96 - Direct Plan - Growth",
-          nav: 156.45,
-          lastUpdated: new Date(),
-        },
-        {
-          schemeCode: "120505",
-          schemeName:
-            "Aditya Birla Sun Life Banking & Financial Services Fund - Direct Plan - Growth",
-          nav: 234.67,
-          lastUpdated: new Date(),
-        },
-      ];
-
-      const filtered = search
-        ? mockFunds.filter((fund) =>
-            fund.schemeName.toLowerCase().includes(search.toLowerCase())
-          )
-        : mockFunds;
-
-      return res.json({
-        funds: filtered.slice((page - 1) * limit, page * limit),
-        totalPages: Math.ceil(filtered.length / limit),
-        currentPage: page,
-        totalFunds: filtered.length,
-      });
-    }
-
     const query = search
       ? { schemeName: { $regex: search, $options: "i" } }
       : {};
@@ -1465,7 +1676,9 @@ app.get("/mutualfunds", async (req, res) => {
   }
 });
 
-// Get specific mutual fund by scheme code
+/**
+ * Get details for a single mutual fund by its scheme code.
+ */
 app.get("/mutualfunds/:schemeCode", async (req, res) => {
   try {
     const fund = await MutualFund.findOne({
@@ -1480,7 +1693,9 @@ app.get("/mutualfunds/:schemeCode", async (req, res) => {
   }
 });
 
-// Manual NAV update trigger (for testing)
+/**
+ * Manually trigger the NAV update process.
+ */
 app.post("/update-nav", async (req, res) => {
   try {
     await fetchAndStoreNAVData();
@@ -1490,45 +1705,1616 @@ app.post("/update-nav", async (req, res) => {
   }
 });
 
-// 🔹 **Additional API Routes for NAV (as requested)**
-// GET /api/nav - Alternative route for NAV data
-app.get("/api/nav", async (req, res) => {
+// --- Investment API Endpoints ---
+
+/**
+ * Get all investments for a user
+ */
+app.get("/investments", verifyToken, async (req, res) => {
   try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 20;
-    const search = req.query.search || "";
+    console.log("📊 Getting investments for user:", req.user.userName);
+    console.log("📊 User object:", req.user);
 
-    const query = search
-      ? { schemeName: { $regex: search, $options: "i" } }
-      : {};
+    const userName = req.user.userName;
+    const investments = await Investment.find({ userName: userName });
+    console.log("📊 Found investments:", investments.length);
 
-    const totalFunds = await MutualFund.countDocuments(query);
-    const funds = await MutualFund.find(query)
-      .sort({ schemeName: 1 })
-      .skip((page - 1) * limit)
-      .limit(limit);
+    res.json(investments);
+  } catch (err) {
+    console.error("❌ Error fetching investments:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Create a new investment
+ */
+app.post("/investment", verifyToken, async (req, res) => {
+  try {
+    console.log("💰 Creating investment for user:", req.user.userName);
+    console.log("💰 Received Investment data:", req.body);
+
+    const {
+      name,
+      amount,
+      interestRate,
+      investmentType,
+      maturityDate,
+      description,
+      goalId,
+      compoundingFrequency,
+      monthlyDeposit,
+      duration,
+    } = req.body;
+
+    // Basic validation
+    if (
+      !name ||
+      !amount ||
+      interestRate === undefined ||
+      interestRate === null ||
+      !investmentType
+    ) {
+      return res
+        .status(400)
+        .json({ error: "Missing required investment fields." });
+    }
+
+    const newInvestment = new Investment({
+      name,
+      amount: parseFloat(amount),
+      currentAmount: parseFloat(amount),
+      interestRate: parseFloat(interestRate),
+      investmentType,
+      startDate: new Date(),
+      maturityDate,
+      description,
+      goalId,
+      compoundingFrequency,
+      monthlyDeposit,
+      duration,
+      userName: req.user.userName,
+    });
+
+    await newInvestment.save();
+
+    console.log("✅ Investment created successfully:", newInvestment._id);
+    res.status(201).json(newInvestment);
+  } catch (err) {
+    console.error("❌ Error creating investment:", err);
+    res.status(500).json({ error: err.message || "Failed to add investment" });
+  }
+});
+
+/**
+ * Update an investment
+ */
+app.put("/investment/:id", verifyToken, async (req, res) => {
+  try {
+    const userName = req.user.userName;
+    const investment = await Investment.findOne({
+      _id: req.params.id,
+      userName: userName,
+    });
+
+    if (!investment) {
+      return res
+        .status(404)
+        .json({ error: "Investment not found or not authorized" });
+    }
+
+    const updatedInvestment = await Investment.findByIdAndUpdate(
+      req.params.id,
+      req.body,
+      { new: true }
+    );
+    res.json(updatedInvestment);
+  } catch (err) {
+    res.status(500).json(err);
+  }
+});
+
+/**
+ * Delete an investment
+ */
+app.delete("/investment/:id", verifyToken, async (req, res) => {
+  try {
+    const userName = req.user.userName;
+    const investment = await Investment.findOne({
+      _id: req.params.id,
+      userName: userName,
+    });
+
+    if (!investment) {
+      return res
+        .status(404)
+        .json({ error: "Investment not found or not authorized" });
+    }
+
+    await Investment.findByIdAndDelete(req.params.id);
+    res.json({ message: "Investment deleted" });
+  } catch (err) {
+    res.status(500).json(err);
+  }
+});
+
+// --- Stock Companies API Endpoints ---
+
+/**
+ * Get stock quote for a specific symbol
+ */
+app.get("/api/stock-quote/:symbol", async (req, res) => {
+  try {
+    const { symbol } = req.params;
+    const FINNHUB_API_KEY = "d28seapr01qle9gsj64gd28seapr01qle9gsj650";
+
+    // Fetch quote and profile simultaneously
+    const [quoteResponse, profileResponse] = await Promise.all([
+      axios.get(`https://finnhub.io/api/v1/quote`, {
+        params: { symbol, token: FINNHUB_API_KEY },
+      }),
+      axios.get(`https://finnhub.io/api/v1/stock/profile2`, {
+        params: { symbol, token: FINNHUB_API_KEY },
+      }),
+    ]);
+
+    const quote = quoteResponse.data;
+    const profile = profileResponse.data;
+
+    // Calculate percentage change
+    const percentChange = quote.pc
+      ? (((quote.c - quote.pc) / quote.pc) * 100).toFixed(2)
+      : 0;
 
     res.json({
-      success: true,
-      data: funds,
-      pagination: {
-        totalFunds,
-        totalPages: Math.ceil(totalFunds / limit),
-        currentPage: page,
-        limit,
+      symbol,
+      quote,
+      profile,
+      percentChange,
+      formatted: {
+        currentPrice: new Intl.NumberFormat("en-US", {
+          style: "currency",
+          currency: "USD",
+        }).format(quote.c || 0),
+        change: `${percentChange >= 0 ? "+" : ""}${percentChange}%`,
       },
     });
   } catch (error) {
+    console.error(
+      `Error fetching stock quote for ${req.params.symbol}:`,
+      error
+    );
     res.status(500).json({
-      success: false,
-      error: error.message,
+      error: "Failed to fetch stock quote",
+      message: error.message,
     });
+  }
+});
+
+/**
+ * Get multiple stock quotes at once
+ */
+app.post("/api/stock-quotes", async (req, res) => {
+  try {
+    const { symbols } = req.body;
+
+    if (!symbols || !Array.isArray(symbols)) {
+      return res.status(400).json({ error: "Symbols array is required" });
+    }
+
+    const FINNHUB_API_KEY = "d28seapr01qle9gsj64gd28seapr01qle9gsj650";
+
+    const promises = symbols.map(async (symbol) => {
+      try {
+        const [quoteResponse, profileResponse] = await Promise.all([
+          axios.get(`https://finnhub.io/api/v1/quote`, {
+            params: { symbol, token: FINNHUB_API_KEY },
+          }),
+          axios.get(`https://finnhub.io/api/v1/stock/profile2`, {
+            params: { symbol, token: FINNHUB_API_KEY },
+          }),
+        ]);
+
+        const quote = quoteResponse.data;
+        const profile = profileResponse.data;
+        const percentChange = quote.pc
+          ? (((quote.c - quote.pc) / quote.pc) * 100).toFixed(2)
+          : 0;
+
+        return {
+          symbol,
+          quote,
+          profile,
+          percentChange,
+          error: null,
+        };
+      } catch (error) {
+        return {
+          symbol,
+          quote: null,
+          profile: null,
+          percentChange: 0,
+          error: error.message,
+        };
+      }
+    });
+
+    const results = await Promise.all(promises);
+    res.json({ data: results });
+  } catch (error) {
+    console.error("Error fetching multiple stock quotes:", error);
+    res.status(500).json({
+      error: "Failed to fetch stock quotes",
+      message: error.message,
+    });
+  }
+});
+
+// --- Stock Transaction API Endpoints ---
+
+/**
+ * Add a new stock transaction (buy/sell)
+ */
+app.post("/api/stock-transactions", async (req, res) => {
+  try {
+    const {
+      userName,
+      symbol,
+      companyName,
+      type,
+      quantity,
+      price,
+      total,
+      date,
+    } = req.body;
+
+    // Validate required fields
+    if (
+      !userName ||
+      !symbol ||
+      !companyName ||
+      !type ||
+      !quantity ||
+      !price ||
+      !total ||
+      !date
+    ) {
+      return res.status(400).json({ error: "All fields are required" });
+    }
+
+    // Validate transaction type
+    if (!["buy", "sell"].includes(type)) {
+      return res
+        .status(400)
+        .json({ error: "Transaction type must be 'buy' or 'sell'" });
+    }
+
+    const stockTransaction = new StockTransaction({
+      userName,
+      symbol,
+      companyName,
+      type,
+      quantity: Number(quantity),
+      price: Number(price),
+      total: Number(total),
+      date,
+    });
+
+    await stockTransaction.save();
+
+    res.status(201).json({
+      message: "Stock transaction added successfully",
+      transaction: stockTransaction,
+    });
+  } catch (error) {
+    console.error("Error adding stock transaction:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Get all stock transactions for a user
+ */
+app.get("/api/stock-transactions/:userName", async (req, res) => {
+  try {
+    const { userName } = req.params;
+    const { symbol, type, limit = 50, page = 1 } = req.query;
+
+    const filter = { userName };
+    if (symbol) filter.symbol = symbol;
+    if (type) filter.type = type;
+
+    const skip = (page - 1) * limit;
+
+    const transactions = await StockTransaction.find(filter)
+      .sort({ timestamp: -1 })
+      .limit(Number(limit))
+      .skip(skip);
+
+    const total = await StockTransaction.countDocuments(filter);
+
+    res.json({
+      transactions,
+      totalPages: Math.ceil(total / limit),
+      currentPage: Number(page),
+      totalTransactions: total,
+    });
+  } catch (error) {
+    console.error("Error fetching stock transactions:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Get user's stock portfolio (aggregated holdings)
+ */
+app.get("/api/stock-portfolio/:userName", async (req, res) => {
+  try {
+    const { userName } = req.params;
+
+    const portfolio = await StockTransaction.aggregate([
+      { $match: { userName } },
+      {
+        $group: {
+          _id: "$symbol",
+          companyName: { $first: "$companyName" },
+          totalShares: {
+            $sum: {
+              $cond: [
+                { $eq: ["$type", "buy"] },
+                "$quantity",
+                { $multiply: ["$quantity", -1] },
+              ],
+            },
+          },
+          totalInvested: {
+            $sum: {
+              $cond: [
+                { $eq: ["$type", "buy"] },
+                "$total",
+                { $multiply: ["$total", -1] },
+              ],
+            },
+          },
+          averagePrice: {
+            $avg: {
+              $cond: [{ $eq: ["$type", "buy"] }, "$price", null],
+            },
+          },
+          lastTransaction: { $max: "$timestamp" },
+        },
+      },
+      { $match: { totalShares: { $gt: 0 } } }, // Only show stocks with positive holdings
+      { $sort: { lastTransaction: -1 } },
+    ]);
+
+    res.json({ portfolio });
+  } catch (error) {
+    console.error("Error fetching stock portfolio:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Delete a stock transaction
+ */
+app.delete("/api/stock-transactions/:transactionId", async (req, res) => {
+  try {
+    const { transactionId } = req.params;
+
+    const deletedTransaction = await StockTransaction.findByIdAndDelete(
+      transactionId
+    );
+
+    if (!deletedTransaction) {
+      return res.status(404).json({ error: "Stock transaction not found" });
+    }
+
+    res.json({
+      message: "Stock transaction deleted successfully",
+      transaction: deletedTransaction,
+    });
+  } catch (error) {
+    console.error("Error deleting stock transaction:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Get all stock companies from Finnhub API with exchange and country filtering
+ * Supports: US, India (NSE, BSE), UK, Hong Kong, and more
+ */
+app.get("/api/stock-companies", async (req, res) => {
+  try {
+    const { search, exchange = "US", country } = req.query;
+
+    // Use the same Finnhub API key as other endpoints
+    const FINNHUB_API_KEY = "d28seapr01qle9gsj64gd28seapr01qle9gsj650";
+
+    // Define exchange mappings for different countries
+    const exchangeMap = {
+      // India
+      NSE: "NS", // National Stock Exchange of India
+      BSE: "BO", // Bombay Stock Exchange
+      INDIA: ["NS", "BO"], // Both Indian exchanges
+
+      // USA
+      US: "US",
+      NASDAQ: "US",
+      NYSE: "US",
+
+      // Other countries
+      UK: "L", // London Stock Exchange
+      HONG_KONG: "HK", // Hong Kong Stock Exchange
+      CANADA: "TO", // Toronto Stock Exchange
+      GERMANY: "F", // Frankfurt Stock Exchange
+      JAPAN: "T", // Tokyo Stock Exchange
+      AUSTRALIA: "AX", // Australian Securities Exchange
+    };
+
+    // Get exchanges to fetch based on the request
+    let exchangesToFetch = [];
+
+    if (country === "INDIA" || exchange === "INDIA") {
+      exchangesToFetch = ["NS", "BO"];
+    } else if (Array.isArray(exchangeMap[exchange.toUpperCase()])) {
+      exchangesToFetch = exchangeMap[exchange.toUpperCase()];
+    } else {
+      exchangesToFetch = [exchangeMap[exchange.toUpperCase()] || exchange];
+    }
+
+    console.log(
+      `Fetching stocks from exchanges: ${exchangesToFetch.join(", ")}`
+    );
+
+    // Fetch data from all specified exchanges
+    const allCompanies = [];
+
+    for (const exchangeCode of exchangesToFetch) {
+      try {
+        const response = await fetch(
+          `https://finnhub.io/api/v1/stock/symbol?exchange=${exchangeCode}&token=${FINNHUB_API_KEY}`
+        );
+
+        if (!response.ok) {
+          console.warn(
+            `Failed to fetch from exchange ${exchangeCode}: ${response.status}`
+          );
+          continue;
+        }
+
+        const exchangeCompanies = await response.json();
+
+        if (Array.isArray(exchangeCompanies)) {
+          // Add exchange info to each company
+          const companiesWithExchange = exchangeCompanies.map((company) => ({
+            ...company,
+            exchange: exchangeCode,
+            country: getCountryFromExchange(exchangeCode),
+          }));
+
+          allCompanies.push(...companiesWithExchange);
+        }
+      } catch (error) {
+        console.warn(
+          `Error fetching from exchange ${exchangeCode}:`,
+          error.message
+        );
+      }
+    }
+
+    // Filter out companies with invalid symbols or names
+    let filteredCompanies = allCompanies.filter(
+      (company) =>
+        company.symbol &&
+        company.description &&
+        company.description.trim() !== ""
+    );
+
+    // For Indian exchanges, allow longer symbols and dots
+    if (exchangesToFetch.some((ex) => ["NS", "BO"].includes(ex))) {
+      // Indian stocks can have longer symbols and dots
+      filteredCompanies = filteredCompanies.filter(
+        (company) => company.symbol.length <= 20 // Longer limit for Indian stocks
+      );
+    } else {
+      // For other exchanges, keep the original filtering
+      filteredCompanies = filteredCompanies.filter(
+        (company) => !company.symbol.includes(".") && company.symbol.length <= 8
+      );
+    }
+
+    // If search query is provided, filter companies
+    if (search && search.trim()) {
+      const searchTerm = search.trim().toLowerCase();
+      filteredCompanies = filteredCompanies.filter(
+        (company) =>
+          company.symbol.toLowerCase().includes(searchTerm) ||
+          company.description.toLowerCase().includes(searchTerm)
+      );
+    }
+
+    // Sort by symbol for consistency
+    filteredCompanies.sort((a, b) => a.symbol.localeCompare(b.symbol));
+
+    // Limit to reasonable number and format response
+    const limitedCompanies = filteredCompanies
+      .slice(0, 2000)
+      .map((company) => ({
+        symbol: company.symbol,
+        name: company.description,
+        displayName: company.displaySymbol || company.symbol,
+        type: company.type || "Common Stock",
+        exchange: company.exchange,
+        country: company.country,
+        currency: company.currency || getCurrencyFromExchange(company.exchange),
+        mic: company.mic, // Market Identifier Code
+      }));
+
+    // Group by exchange for better organization
+    const groupedByExchange = limitedCompanies.reduce((acc, company) => {
+      const exchangeName = getExchangeName(company.exchange);
+      if (!acc[exchangeName]) {
+        acc[exchangeName] = [];
+      }
+      acc[exchangeName].push(company);
+      return acc;
+    }, {});
+
+    res.json({
+      companies: limitedCompanies,
+      groupedByExchange,
+      total: limitedCompanies.length,
+      totalAvailable: filteredCompanies.length,
+      exchanges: exchangesToFetch,
+      search: search || "",
+      requestedExchange: exchange,
+      requestedCountry: country,
+      message:
+        limitedCompanies.length === 0
+          ? `No companies found for exchange ${exchange}. This may be due to API key limitations or exchange availability.`
+          : null,
+    });
+  } catch (error) {
+    console.error("Error fetching stock companies:", error);
+    res.status(500).json({
+      error: "Failed to fetch stock companies",
+      message: error.message,
+    });
+  }
+});
+
+// Helper function to get country from exchange code
+function getCountryFromExchange(exchangeCode) {
+  const countryMap = {
+    NS: "India",
+    BO: "India",
+    US: "United States",
+    L: "United Kingdom",
+    HK: "Hong Kong",
+    TO: "Canada",
+    F: "Germany",
+    T: "Japan",
+    AX: "Australia",
+  };
+  return countryMap[exchangeCode] || "Unknown";
+}
+
+// Helper function to get currency from exchange
+function getCurrencyFromExchange(exchangeCode) {
+  const currencyMap = {
+    NS: "INR",
+    BO: "INR",
+    US: "USD",
+    L: "GBP",
+    HK: "HKD",
+    TO: "CAD",
+    F: "EUR",
+    T: "JPY",
+    AX: "AUD",
+  };
+  return currencyMap[exchangeCode] || "USD";
+}
+
+// Helper function to get exchange display name
+function getExchangeName(exchangeCode) {
+  const nameMap = {
+    NS: "NSE (National Stock Exchange of India)",
+    BO: "BSE (Bombay Stock Exchange)",
+    US: "US Exchanges (NASDAQ, NYSE)",
+    L: "London Stock Exchange",
+    HK: "Hong Kong Stock Exchange",
+    TO: "Toronto Stock Exchange",
+    F: "Frankfurt Stock Exchange",
+    T: "Tokyo Stock Exchange",
+    AX: "Australian Securities Exchange",
+  };
+  return nameMap[exchangeCode] || exchangeCode;
+}
+
+/**
+ * Get available exchanges and their status
+ */
+app.get("/api/stock-exchanges", async (req, res) => {
+  try {
+    const FINNHUB_API_KEY = "d28seapr01qle9gsj64gd28seapr01qle9gsj650";
+
+    const exchangesToTest = [
+      {
+        code: "US",
+        name: "US Exchanges (NASDAQ, NYSE)",
+        country: "United States",
+      },
+      {
+        code: "NS",
+        name: "National Stock Exchange of India",
+        country: "India",
+      },
+      { code: "BO", name: "Bombay Stock Exchange", country: "India" },
+      { code: "L", name: "London Stock Exchange", country: "United Kingdom" },
+      { code: "HK", name: "Hong Kong Stock Exchange", country: "Hong Kong" },
+      { code: "TO", name: "Toronto Stock Exchange", country: "Canada" },
+      { code: "F", name: "Frankfurt Stock Exchange", country: "Germany" },
+      { code: "T", name: "Tokyo Stock Exchange", country: "Japan" },
+      {
+        code: "AX",
+        name: "Australian Securities Exchange",
+        country: "Australia",
+      },
+    ];
+
+    const exchangeStatus = [];
+
+    for (const exchange of exchangesToTest) {
+      try {
+        const response = await fetch(
+          `https://finnhub.io/api/v1/stock/symbol?exchange=${exchange.code}&token=${FINNHUB_API_KEY}`
+        );
+
+        if (response.ok) {
+          const data = await response.json();
+          exchangeStatus.push({
+            ...exchange,
+            available: true,
+            totalCompanies: Array.isArray(data) ? data.length : 0,
+            status: "Available",
+          });
+        } else {
+          exchangeStatus.push({
+            ...exchange,
+            available: false,
+            totalCompanies: 0,
+            status: `HTTP ${response.status}`,
+          });
+        }
+      } catch (error) {
+        exchangeStatus.push({
+          ...exchange,
+          available: false,
+          totalCompanies: 0,
+          status: `Error: ${error.message}`,
+        });
+      }
+    }
+
+    res.json({
+      exchanges: exchangeStatus,
+      availableExchanges: exchangeStatus.filter(
+        (ex) => ex.available && ex.totalCompanies > 0
+      ),
+      totalExchangesTested: exchangesToTest.length,
+    });
+  } catch (error) {
+    console.error("Error checking exchange availability:", error);
+    res.status(500).json({
+      error: "Failed to check exchange availability",
+      message: error.message,
+    });
+  }
+});
+
+// � **MF (Mutual Fund) CRUD Operations**
+
+/**
+ * Get all MF investments for a user
+ */
+app.get("/api/mf-investments", verifyToken, async (req, res) => {
+  try {
+    console.log("📈 Getting MF investments for user:", req.user.userName);
+
+    const userName = req.user.userName;
+    const mfInvestments = await Investment.find({
+      userName: userName,
+      investmentType: "Mutual Fund",
+    }).sort({ startDate: -1 });
+
+    console.log("📈 Found MF investments:", mfInvestments.length);
+    res.json(mfInvestments);
+  } catch (err) {
+    console.error("❌ Error fetching MF investments:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Create a new MF investment
+ */
+app.post("/api/mf-investments", verifyToken, async (req, res) => {
+  try {
+    console.log("💰 Creating MF investment for user:", req.user.userName);
+    console.log("💰 Received MF investment data:", req.body);
+
+    const {
+      name,
+      amount,
+      monthlyDeposit,
+      duration,
+      description,
+      startDate,
+      goalId,
+    } = req.body;
+
+    // Basic validation
+    if (!name || !monthlyDeposit || !duration) {
+      return res.status(400).json({
+        error: "Name, monthly deposit amount, and duration are required.",
+      });
+    }
+
+    const newMFInvestment = new Investment({
+      name,
+      amount: parseFloat(monthlyDeposit), // Initial amount is monthly deposit
+      currentAmount: parseFloat(monthlyDeposit),
+      interestRate: 12, // Default 12% for MF SIP
+      investmentType: "Mutual Fund",
+      startDate: startDate ? new Date(startDate) : new Date(),
+      description: description || `SIP in ${name}`,
+      monthlyDeposit: parseFloat(monthlyDeposit),
+      duration: parseFloat(duration),
+      goalId: goalId || null,
+      userName: req.user.userName,
+      compoundingFrequency: "monthly",
+    });
+
+    await newMFInvestment.save();
+
+    console.log("✅ MF investment created successfully:", newMFInvestment._id);
+    res.status(201).json(newMFInvestment);
+  } catch (err) {
+    console.error("❌ Error creating MF investment:", err);
+    res
+      .status(500)
+      .json({ error: err.message || "Failed to add MF investment" });
+  }
+});
+
+/**
+ * Get a specific MF investment by ID
+ */
+app.get("/api/mf-investments/:id", verifyToken, async (req, res) => {
+  try {
+    const userName = req.user.userName;
+    const mfInvestment = await Investment.findOne({
+      _id: req.params.id,
+      userName: userName,
+      investmentType: "Mutual Fund",
+    });
+
+    if (!mfInvestment) {
+      return res
+        .status(404)
+        .json({ error: "MF investment not found or not authorized" });
+    }
+
+    res.json(mfInvestment);
+  } catch (err) {
+    console.error("❌ Error fetching MF investment:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Update an MF investment
+ */
+app.put("/api/mf-investments/:id", verifyToken, async (req, res) => {
+  try {
+    const userName = req.user.userName;
+    const mfInvestment = await Investment.findOne({
+      _id: req.params.id,
+      userName: userName,
+      investmentType: "Mutual Fund",
+    });
+
+    if (!mfInvestment) {
+      return res
+        .status(404)
+        .json({ error: "MF investment not found or not authorized" });
+    }
+
+    // Update allowed fields
+    const updateData = {
+      ...req.body,
+      investmentType: "Mutual Fund", // Ensure it remains MF
+      userName: userName, // Ensure ownership doesn't change
+    };
+
+    const updatedMFInvestment = await Investment.findByIdAndUpdate(
+      req.params.id,
+      updateData,
+      { new: true }
+    );
+
+    console.log(
+      "✅ MF investment updated successfully:",
+      updatedMFInvestment._id
+    );
+    res.json(updatedMFInvestment);
+  } catch (err) {
+    console.error("❌ Error updating MF investment:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Delete an MF investment
+ */
+app.delete("/api/mf-investments/:id", verifyToken, async (req, res) => {
+  try {
+    const userName = req.user.userName;
+    const mfInvestment = await Investment.findOne({
+      _id: req.params.id,
+      userName: userName,
+      investmentType: "Mutual Fund",
+    });
+
+    if (!mfInvestment) {
+      return res
+        .status(404)
+        .json({ error: "MF investment not found or not authorized" });
+    }
+
+    await Investment.findByIdAndDelete(req.params.id);
+
+    console.log("✅ MF investment deleted successfully:", req.params.id);
+    res.json({ message: "MF investment deleted successfully" });
+  } catch (err) {
+    console.error("❌ Error deleting MF investment:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Get MF portfolio summary for a user
+ */
+app.get("/api/mf-portfolio", verifyToken, async (req, res) => {
+  try {
+    const userName = req.user.userName;
+    const mfInvestments = await Investment.find({
+      userName: userName,
+      investmentType: "Mutual Fund",
+    }).sort({ startDate: -1 });
+
+    // Calculate portfolio summary
+    const totalInvestments = mfInvestments.length;
+    const totalInvested = mfInvestments.reduce(
+      (sum, inv) => sum + inv.amount,
+      0
+    );
+    const totalCurrentValue = mfInvestments.reduce(
+      (sum, inv) => sum + inv.currentAmount,
+      0
+    );
+    const totalMonthlyDeposit = mfInvestments.reduce(
+      (sum, inv) => sum + (inv.monthlyDeposit || 0),
+      0
+    );
+    const totalProfit = totalCurrentValue - totalInvested;
+    const profitPercentage =
+      totalInvested > 0 ? ((totalProfit / totalInvested) * 100).toFixed(2) : 0;
+
+    // Group by goal if goalId exists
+    const groupedByGoal = mfInvestments.reduce((acc, investment) => {
+      const goalId = investment.goalId || "no-goal";
+      if (!acc[goalId]) {
+        acc[goalId] = {
+          goalId: goalId,
+          investments: [],
+          totalInvested: 0,
+          totalCurrentValue: 0,
+          totalMonthlyDeposit: 0,
+        };
+      }
+      acc[goalId].investments.push(investment);
+      acc[goalId].totalInvested += investment.amount;
+      acc[goalId].totalCurrentValue += investment.currentAmount;
+      acc[goalId].totalMonthlyDeposit += investment.monthlyDeposit || 0;
+      return acc;
+    }, {});
+
+    res.json({
+      summary: {
+        totalInvestments,
+        totalInvested,
+        totalCurrentValue,
+        totalMonthlyDeposit,
+        totalProfit,
+        profitPercentage: parseFloat(profitPercentage),
+      },
+      investments: mfInvestments,
+      groupedByGoal: Object.values(groupedByGoal),
+    });
+  } catch (err) {
+    console.error("❌ Error fetching MF portfolio:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Get MF investment performance analytics
+ */
+app.get("/api/mf-analytics", verifyToken, async (req, res) => {
+  try {
+    const userName = req.user.userName;
+    const mfInvestments = await Investment.find({
+      userName: userName,
+      investmentType: "Mutual Fund",
+    }).sort({ startDate: 1 });
+
+    if (mfInvestments.length === 0) {
+      return res.json({
+        message: "No MF investments found",
+        analytics: {
+          monthlyGrowth: [],
+          performanceMetrics: {
+            bestPerformer: null,
+            worstPerformer: null,
+            averageReturn: 0,
+            totalSIPAmount: 0,
+          },
+        },
+      });
+    }
+
+    // Calculate individual investment performance
+    const investmentPerformance = mfInvestments.map((investment) => {
+      const invested = investment.amount;
+      const current = investment.currentAmount;
+      const profit = current - invested;
+      const profitPercentage = invested > 0 ? (profit / invested) * 100 : 0;
+
+      return {
+        id: investment._id,
+        name: investment.name,
+        invested,
+        current,
+        profit,
+        profitPercentage: parseFloat(profitPercentage.toFixed(2)),
+        monthlyDeposit: investment.monthlyDeposit || 0,
+        duration: investment.duration || 0,
+      };
+    });
+
+    // Find best and worst performers
+    const bestPerformer = investmentPerformance.reduce((best, current) =>
+      current.profitPercentage > best.profitPercentage ? current : best
+    );
+
+    const worstPerformer = investmentPerformance.reduce((worst, current) =>
+      current.profitPercentage < worst.profitPercentage ? current : worst
+    );
+
+    // Calculate average return
+    const averageReturn =
+      investmentPerformance.length > 0
+        ? investmentPerformance.reduce(
+            (sum, inv) => sum + inv.profitPercentage,
+            0
+          ) / investmentPerformance.length
+        : 0;
+
+    // Calculate total SIP amount
+    const totalSIPAmount = mfInvestments.reduce(
+      (sum, inv) => sum + (inv.monthlyDeposit || 0),
+      0
+    );
+
+    // Generate monthly growth data (simulated based on investment dates)
+    const monthlyGrowth = [];
+    const currentDate = new Date();
+    const startDate = new Date(
+      Math.min(...mfInvestments.map((inv) => new Date(inv.startDate).getTime()))
+    );
+
+    for (
+      let d = new Date(startDate);
+      d <= currentDate;
+      d.setMonth(d.getMonth() + 1)
+    ) {
+      const monthKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(
+        2,
+        "0"
+      )}`;
+
+      // Calculate cumulative investment and value for this month
+      const relevantInvestments = mfInvestments.filter(
+        (inv) => new Date(inv.startDate) <= d
+      );
+
+      const monthlyInvested = relevantInvestments.reduce(
+        (sum, inv) => sum + inv.amount,
+        0
+      );
+      const monthlyValue = relevantInvestments.reduce(
+        (sum, inv) => sum + inv.currentAmount,
+        0
+      );
+
+      monthlyGrowth.push({
+        month: monthKey,
+        invested: monthlyInvested,
+        value: monthlyValue,
+        profit: monthlyValue - monthlyInvested,
+      });
+    }
+
+    res.json({
+      analytics: {
+        investmentPerformance,
+        monthlyGrowth,
+        performanceMetrics: {
+          bestPerformer,
+          worstPerformer,
+          averageReturn: parseFloat(averageReturn.toFixed(2)),
+          totalSIPAmount,
+        },
+        summary: {
+          totalInvestments: mfInvestments.length,
+          totalInvested: mfInvestments.reduce(
+            (sum, inv) => sum + inv.amount,
+            0
+          ),
+          totalCurrentValue: mfInvestments.reduce(
+            (sum, inv) => sum + inv.currentAmount,
+            0
+          ),
+        },
+      },
+    });
+  } catch (err) {
+    console.error("❌ Error fetching MF analytics:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// �🔹 **Start Server**
+// 📈 **Stock (Equity) CRUD Operations**
+
+/**
+ * Get all stock investments for a user
+ */
+app.get("/api/stock-investments", verifyToken, async (req, res) => {
+  try {
+    console.log("📈 Getting stock investments for user:", req.user.userName);
+
+    const userName = req.user.userName;
+    const stockInvestments = await Investment.find({
+      userName: userName,
+      investmentType: "Stock",
+    }).sort({ startDate: -1 });
+
+    console.log("📈 Found stock investments:", stockInvestments.length);
+    res.json(stockInvestments);
+  } catch (err) {
+    console.error("❌ Error fetching stock investments:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Create a new stock investment
+ */
+app.post("/api/stock-investments", verifyToken, async (req, res) => {
+  try {
+    console.log(
+      "💰 Creating/updating stock investment for user:",
+      req.user.userName
+    );
+    console.log("💰 Received stock investment data:", req.body);
+
+    const {
+      name,
+      amount,
+      stockSymbol,
+      stockQuantity,
+      stockPrice,
+      description,
+      startDate,
+      goalId,
+    } = req.body;
+
+    // Basic validation
+    if (!name || !amount || !stockSymbol || !stockQuantity || !stockPrice) {
+      return res.status(400).json({
+        error: "Name, amount, stock symbol, quantity, and price are required.",
+      });
+    }
+
+    const symbolUpper = stockSymbol.toUpperCase();
+    const quantityNum = parseFloat(stockQuantity);
+    const priceNum = parseFloat(stockPrice);
+    const amountNum = parseFloat(amount);
+
+    // Check if there's already an existing stock investment for this symbol
+    const existingInvestment = await Investment.findOne({
+      userName: req.user.userName,
+      stockSymbol: symbolUpper,
+      investmentType: "Stock",
+    });
+
+    // Validate sell transactions
+    if (
+      quantityNum < 0 &&
+      (!existingInvestment ||
+        existingInvestment.stockQuantity < Math.abs(quantityNum))
+    ) {
+      return res.status(400).json({
+        error: `Cannot sell ${Math.abs(quantityNum)} shares. You only own ${
+          existingInvestment ? existingInvestment.stockQuantity : 0
+        } shares of ${symbolUpper}.`,
+      });
+    }
+
+    if (existingInvestment) {
+      // Update existing investment
+      const newTotalQuantity = existingInvestment.stockQuantity + quantityNum;
+
+      // Handle sell transactions (negative quantity)
+      if (newTotalQuantity <= 0) {
+        // If selling all or more than owned, delete the investment
+        await Investment.findByIdAndDelete(existingInvestment._id);
+        console.log(
+          "✅ Stock investment deleted (sold all shares):",
+          existingInvestment._id
+        );
+        res.status(200).json({
+          message: "Stock investment deleted - all shares sold",
+          deletedId: existingInvestment._id,
+        });
+      } else {
+        // Partial sell or additional buy
+        const newTotalAmount =
+          quantityNum > 0
+            ? existingInvestment.amount + amountNum // Buy: add amount
+            : existingInvestment.amount -
+              existingInvestment.stockPrice * Math.abs(quantityNum); // Sell: subtract based on current average price
+
+        const newAveragePrice =
+          quantityNum > 0
+            ? newTotalAmount / newTotalQuantity // Buy: calculate new average
+            : existingInvestment.stockPrice; // Sell: keep same average price
+
+        existingInvestment.stockQuantity = newTotalQuantity;
+        existingInvestment.amount = newTotalAmount;
+        existingInvestment.currentAmount = newTotalAmount;
+        existingInvestment.stockPrice = newAveragePrice;
+        existingInvestment.description = `${newTotalQuantity} shares of ${symbolUpper} at average price ${newAveragePrice.toFixed(
+          2
+        )} per share${
+          goalId && goalId !== existingInvestment.goalId
+            ? ` - Linked to goal`
+            : ""
+        }`;
+
+        // Update goal if provided and different
+        if (goalId && goalId !== existingInvestment.goalId) {
+          existingInvestment.goalId = goalId;
+        }
+
+        await existingInvestment.save();
+
+        console.log(
+          "✅ Stock investment updated successfully:",
+          existingInvestment._id,
+          "New quantity:",
+          newTotalQuantity
+        );
+        res.status(200).json(existingInvestment);
+      }
+    } else {
+      // Trying to create new investment
+      if (quantityNum < 0) {
+        return res.status(400).json({
+          error: `Cannot sell ${Math.abs(
+            quantityNum
+          )} shares of ${symbolUpper}. You don't own any shares of this stock.`,
+        });
+      }
+
+      // Create new investment (only for buy transactions)
+      const newStockInvestment = new Investment({
+        name,
+        amount: amountNum,
+        currentAmount: amountNum,
+        interestRate: 0, // Stocks don't have fixed interest rate
+        investmentType: "Stock",
+        startDate: startDate ? new Date(startDate) : new Date(),
+        description:
+          description ||
+          `${quantityNum} shares of ${symbolUpper} at $${priceNum} per share`,
+        stockSymbol: symbolUpper,
+        stockQuantity: quantityNum,
+        stockPrice: priceNum,
+        goalId: goalId || null,
+        userName: req.user.userName,
+      });
+
+      await newStockInvestment.save();
+
+      console.log(
+        "✅ New stock investment created successfully:",
+        newStockInvestment._id
+      );
+      res.status(201).json(newStockInvestment);
+    }
+  } catch (err) {
+    console.error("❌ Error creating/updating stock investment:", err);
+    res
+      .status(500)
+      .json({ error: err.message || "Failed to add stock investment" });
+  }
+});
+
+/**
+ * Get a specific stock investment by ID
+ */
+app.get("/api/stock-investments/:id", verifyToken, async (req, res) => {
+  try {
+    const userName = req.user.userName;
+    const stockInvestment = await Investment.findOne({
+      _id: req.params.id,
+      userName: userName,
+      investmentType: "Stock",
+    });
+
+    if (!stockInvestment) {
+      return res
+        .status(404)
+        .json({ error: "Stock investment not found or not authorized" });
+    }
+
+    res.json(stockInvestment);
+  } catch (err) {
+    console.error("❌ Error fetching stock investment:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Update a stock investment
+ */
+app.put("/api/stock-investments/:id", verifyToken, async (req, res) => {
+  try {
+    const userName = req.user.userName;
+    const stockInvestment = await Investment.findOne({
+      _id: req.params.id,
+      userName: userName,
+      investmentType: "Stock",
+    });
+
+    if (!stockInvestment) {
+      return res
+        .status(404)
+        .json({ error: "Stock investment not found or not authorized" });
+    }
+
+    // Update allowed fields
+    const updateData = {
+      ...req.body,
+      investmentType: "Stock", // Ensure it remains a stock investment
+      userName: userName, // Ensure ownership doesn't change
+    };
+
+    const updatedStockInvestment = await Investment.findByIdAndUpdate(
+      req.params.id,
+      updateData,
+      { new: true }
+    );
+
+    console.log(
+      "✅ Stock investment updated successfully:",
+      updatedStockInvestment._id
+    );
+    res.json(updatedStockInvestment);
+  } catch (err) {
+    console.error("❌ Error updating stock investment:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Delete a stock investment
+ */
+app.delete("/api/stock-investments/:id", verifyToken, async (req, res) => {
+  try {
+    const userName = req.user.userName;
+    const stockInvestment = await Investment.findOne({
+      _id: req.params.id,
+      userName: userName,
+      investmentType: "Stock",
+    });
+
+    if (!stockInvestment) {
+      return res
+        .status(404)
+        .json({ error: "Stock investment not found or not authorized" });
+    }
+
+    await Investment.findByIdAndDelete(req.params.id);
+
+    console.log("✅ Stock investment deleted successfully:", req.params.id);
+    res.json({ message: "Stock investment deleted successfully" });
+  } catch (err) {
+    console.error("❌ Error deleting stock investment:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Get stock portfolio summary for a user
+ */
+app.get("/api/stock-portfolio", verifyToken, async (req, res) => {
+  try {
+    const userName = req.user.userName;
+    const stockInvestments = await Investment.find({
+      userName: userName,
+      investmentType: "Stock",
+    }).sort({ startDate: -1 });
+
+    // Group by stock symbol to create portfolio summary
+    const portfolioMap = {};
+    let totalInvestments = 0;
+    let totalInvested = 0;
+    let totalCurrentValue = 0;
+
+    stockInvestments.forEach((investment) => {
+      const symbol = investment.stockSymbol;
+      if (!portfolioMap[symbol]) {
+        portfolioMap[symbol] = {
+          symbol,
+          companyName: investment.name.split(" - ")[0] || symbol,
+          totalShares: 0,
+          totalInvested: 0,
+          averagePrice: 0,
+          transactions: [],
+        };
+      }
+
+      portfolioMap[symbol].totalShares += investment.stockQuantity;
+      portfolioMap[symbol].totalInvested += investment.amount;
+      portfolioMap[symbol].transactions.push({
+        type: investment.stockQuantity > 0 ? "buy" : "sell",
+        quantity: Math.abs(investment.stockQuantity),
+        price: investment.stockPrice,
+        amount: investment.amount,
+        date: investment.startDate,
+        description: investment.description,
+      });
+
+      totalInvestments++;
+      totalInvested += investment.amount;
+      totalCurrentValue += investment.currentAmount;
+    });
+
+    // Calculate average prices and filter out zero holdings
+    const portfolio = Object.values(portfolioMap)
+      .map((item) => ({
+        ...item,
+        averagePrice:
+          item.totalShares > 0 ? item.totalInvested / item.totalShares : 0,
+      }))
+      .filter((item) => item.totalShares > 0);
+
+    const totalProfit = totalCurrentValue - totalInvested;
+    const profitPercentage =
+      totalInvested > 0 ? ((totalProfit / totalInvested) * 100).toFixed(2) : 0;
+
+    res.json({
+      summary: {
+        totalInvestments,
+        totalStocks: portfolio.length,
+        totalInvested,
+        totalCurrentValue,
+        totalProfit,
+        profitPercentage: parseFloat(profitPercentage),
+      },
+      portfolio,
+      investments: stockInvestments,
+    });
+  } catch (err) {
+    console.error("❌ Error fetching stock portfolio:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Get stock investment performance analytics
+ */
+app.get("/api/stock-analytics", verifyToken, async (req, res) => {
+  try {
+    const userName = req.user.userName;
+    const stockInvestments = await Investment.find({
+      userName: userName,
+      investmentType: "Stock",
+    }).sort({ startDate: 1 });
+
+    if (stockInvestments.length === 0) {
+      return res.json({
+        message: "No stock investments found",
+        analytics: {
+          performanceMetrics: {
+            bestPerformer: null,
+            worstPerformer: null,
+            totalReturn: 0,
+            averageReturn: 0,
+          },
+          sectorAllocation: [],
+          monthlyPerformance: [],
+        },
+      });
+    }
+
+    // Calculate individual stock performance
+    const stockPerformance = {};
+    stockInvestments.forEach((investment) => {
+      const symbol = investment.stockSymbol;
+      if (!stockPerformance[symbol]) {
+        stockPerformance[symbol] = {
+          symbol,
+          name: investment.name.split(" - ")[0] || symbol,
+          totalInvested: 0,
+          totalCurrentValue: 0,
+          totalShares: 0,
+        };
+      }
+
+      stockPerformance[symbol].totalInvested += investment.amount;
+      stockPerformance[symbol].totalCurrentValue += investment.currentAmount;
+      stockPerformance[symbol].totalShares += investment.stockQuantity;
+    });
+
+    // Calculate performance metrics for each stock
+    const performanceArray = Object.values(stockPerformance).map((stock) => {
+      const profit = stock.totalCurrentValue - stock.totalInvested;
+      const profitPercentage =
+        stock.totalInvested > 0 ? (profit / stock.totalInvested) * 100 : 0;
+
+      return {
+        ...stock,
+        profit,
+        profitPercentage: parseFloat(profitPercentage.toFixed(2)),
+        averagePrice:
+          stock.totalShares > 0 ? stock.totalInvested / stock.totalShares : 0,
+      };
+    });
+
+    // Find best and worst performers
+    const bestPerformer =
+      performanceArray.length > 0
+        ? performanceArray.reduce((best, current) =>
+            current.profitPercentage > best.profitPercentage ? current : best
+          )
+        : null;
+
+    const worstPerformer =
+      performanceArray.length > 0
+        ? performanceArray.reduce((worst, current) =>
+            current.profitPercentage < worst.profitPercentage ? current : worst
+          )
+        : null;
+
+    // Calculate total return
+    const totalInvested = performanceArray.reduce(
+      (sum, stock) => sum + stock.totalInvested,
+      0
+    );
+    const totalCurrentValue = performanceArray.reduce(
+      (sum, stock) => sum + stock.totalCurrentValue,
+      0
+    );
+    const totalReturn =
+      totalInvested > 0
+        ? ((totalCurrentValue - totalInvested) / totalInvested) * 100
+        : 0;
+
+    // Calculate average return
+    const averageReturn =
+      performanceArray.length > 0
+        ? performanceArray.reduce(
+            (sum, stock) => sum + stock.profitPercentage,
+            0
+          ) / performanceArray.length
+        : 0;
+
+    // Generate monthly performance data (simplified)
+    const monthlyPerformance = [];
+    const currentDate = new Date();
+    const startDate =
+      stockInvestments.length > 0
+        ? new Date(
+            Math.min(
+              ...stockInvestments.map((inv) =>
+                new Date(inv.startDate).getTime()
+              )
+            )
+          )
+        : new Date();
+
+    for (
+      let d = new Date(startDate);
+      d <= currentDate;
+      d.setMonth(d.getMonth() + 1)
+    ) {
+      const monthKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(
+        2,
+        "0"
+      )}`;
+
+      // Calculate cumulative investment and value for this month
+      const relevantInvestments = stockInvestments.filter(
+        (inv) => new Date(inv.startDate) <= d
+      );
+
+      const monthlyInvested = relevantInvestments.reduce(
+        (sum, inv) => sum + inv.amount,
+        0
+      );
+      const monthlyValue = relevantInvestments.reduce(
+        (sum, inv) => sum + inv.currentAmount,
+        0
+      );
+
+      monthlyPerformance.push({
+        month: monthKey,
+        invested: monthlyInvested,
+        value: monthlyValue,
+        profit: monthlyValue - monthlyInvested,
+        return:
+          monthlyInvested > 0
+            ? ((monthlyValue - monthlyInvested) / monthlyInvested) * 100
+            : 0,
+      });
+    }
+
+    res.json({
+      analytics: {
+        performanceMetrics: {
+          bestPerformer,
+          worstPerformer,
+          totalReturn: parseFloat(totalReturn.toFixed(2)),
+          averageReturn: parseFloat(averageReturn.toFixed(2)),
+          totalStocks: performanceArray.length,
+        },
+        stockPerformance: performanceArray,
+        monthlyPerformance,
+        summary: {
+          totalInvestments: stockInvestments.length,
+          totalInvested,
+          totalCurrentValue,
+          totalProfit: totalCurrentValue - totalInvested,
+        },
+      },
+    });
+  } catch (err) {
+    console.error("❌ Error fetching stock analytics:", err);
+    res.status(500).json({ error: err.message });
   }
 });
 
 // 🔹 **Start Server**
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`📱 Mobile devices can connect at: http://10.69.228.236:${PORT}`);
+  console.log(
+    `📱 Mobile devices can connect at: http://192.168.30.236:${PORT}`
+  );
   console.log(`💻 Local access: http://localhost:${PORT}`);
 });
