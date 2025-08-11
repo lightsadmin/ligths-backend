@@ -1546,19 +1546,47 @@ app.get("/test-auth", verifyToken, (req, res) => {
 const fetchAndStoreNAVData = async () => {
   try {
     console.log("📈 Fetching NAV data from AMFI...");
+
     const response = await axios.get(
-      "https://www.amfiindia.com/spages/NAVAll.txt"
+      "https://www.amfiindia.com/spages/NAVAll.txt",
+      {
+        timeout: 60000, // 60 second timeout
+        headers: {
+          "User-Agent": "Mozilla/5.0 (compatible; NAVFetcher/1.0)",
+        },
+      }
     );
+
+    console.log(
+      `📊 Received response size: ${response.data.length} characters`
+    );
+
     const lines = response.data.split("\n");
+    console.log(`📊 Total lines in response: ${lines.length}`);
+
     const updates = [];
+    let validLines = 0;
+    let invalidLines = 0;
 
     for (const line of lines) {
-      if (line.trim() === "" || line.includes("Scheme Code")) continue;
+      if (
+        line.trim() === "" ||
+        line.includes("Scheme Code") ||
+        line.includes("ISIN") ||
+        line.includes("Open Ended") ||
+        line.includes("Mutual Fund") ||
+        line.startsWith("Close")
+      ) {
+        continue;
+      }
+
       const parts = line.split(";");
-      if (parts.length >= 4) {
+      if (parts.length >= 6) {
+        // Ensure we have all required fields including date
         const schemeCode = parts[0].trim();
-        const schemeName = parts[2].trim();
-        const nav = parseFloat(parts[3].trim());
+        const schemeName = parts[3].trim(); // Scheme name is at index 3
+        const navString = parts[4].trim(); // NAV is at index 4
+        const nav = parseFloat(navString);
 
         if (schemeCode && schemeName && !isNaN(nav) && nav > 0) {
           updates.push({
@@ -1570,20 +1598,50 @@ const fetchAndStoreNAVData = async () => {
               upsert: true,
             },
           });
+          validLines++;
+        } else {
+          invalidLines++;
+          if (invalidLines <= 5) {
+            // Log first 5 invalid lines for debugging
+            console.log(`⚠️ Invalid line: ${line.substring(0, 100)}...`);
+            console.log(
+              `  - Code: "${schemeCode}", Name: "${schemeName}", NAV: "${navString}" (${nav})`
+            );
+          }
         }
       }
     }
 
+    console.log(`📊 Processing statistics:
+    - Total lines: ${lines.length}
+    - Valid funds: ${validLines}
+    - Invalid lines: ${invalidLines}
+    - Updates to process: ${updates.length}`);
+
     if (updates.length > 0) {
-      await MutualFund.bulkWrite(updates);
-      console.log(
-        `✅ NAV data updated successfully. Processed ${updates.length} funds.`
-      );
+      console.log("💾 Starting bulk write to database...");
+      const result = await MutualFund.bulkWrite(updates, { ordered: false });
+      console.log(`✅ NAV data updated successfully. 
+      - Processed: ${updates.length} funds
+      - Inserted: ${result.upsertedCount}
+      - Modified: ${result.modifiedCount}
+      - Total operations: ${
+        result.insertedCount + result.modifiedCount + result.upsertedCount
+      }`);
+
+      // Get final count
+      const totalCount = await MutualFund.countDocuments();
+      console.log(`📊 Total funds in database: ${totalCount}`);
     } else {
       console.log("ℹ️ No new NAV data to update.");
     }
   } catch (error) {
     console.error("❌ Error fetching NAV data:", error.message);
+    if (error.response) {
+      console.error("Response status:", error.response.status);
+      console.error("Response headers:", error.response.headers);
+    }
+    throw error;
   }
 };
 
@@ -1698,8 +1756,132 @@ app.get("/mutualfunds/:schemeCode", async (req, res) => {
  */
 app.post("/update-nav", async (req, res) => {
   try {
+    console.log("🔄 Manual NAV update triggered...");
     await fetchAndStoreNAVData();
-    res.json({ message: "NAV data updated successfully" });
+
+    // Get count after update
+    const totalCount = await MutualFund.countDocuments();
+    console.log(`📊 Total funds in database after update: ${totalCount}`);
+
+    res.json({
+      message: "NAV data updated successfully",
+      totalFunds: totalCount,
+    });
+  } catch (error) {
+    console.error("❌ Manual NAV update failed:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Test endpoint to check NAV parsing without updating database
+ */
+app.get("/test-nav-parsing", async (req, res) => {
+  try {
+    console.log("🧪 Testing NAV parsing...");
+
+    const response = await axios.get(
+      "https://www.amfiindia.com/spages/NAVAll.txt",
+      {
+        timeout: 60000,
+        headers: {
+          "User-Agent": "Mozilla/5.0 (compatible; NAVFetcher/1.0)",
+        },
+      }
+    );
+
+    const lines = response.data.split("\n");
+    console.log(`📊 Total lines in response: ${lines.length}`);
+
+    let validLines = 0;
+    let invalidLines = 0;
+    let sampleValidLines = [];
+    let sampleInvalidLines = [];
+
+    for (const line of lines) {
+      if (
+        line.trim() === "" ||
+        line.includes("Scheme Code") ||
+        line.includes("ISIN") ||
+        line.includes("Open Ended") ||
+        line.includes("Mutual Fund") ||
+        line.startsWith("Close")
+      ) {
+        continue;
+      }
+
+      const parts = line.split(";");
+      if (parts.length >= 6) {
+        const schemeCode = parts[0].trim();
+        const schemeName = parts[3].trim();
+        const navString = parts[4].trim();
+        const nav = parseFloat(navString);
+
+        if (schemeCode && schemeName && !isNaN(nav) && nav > 0) {
+          validLines++;
+          if (sampleValidLines.length < 3) {
+            sampleValidLines.push({
+              schemeCode,
+              schemeName: schemeName.substring(0, 50) + "...",
+              nav,
+            });
+          }
+        } else {
+          invalidLines++;
+          if (sampleInvalidLines.length < 3) {
+            sampleInvalidLines.push({
+              line: line.substring(0, 100) + "...",
+              parts: parts.length,
+              schemeCode,
+              schemeName: schemeName
+                ? schemeName.substring(0, 30) + "..."
+                : "empty",
+              navString,
+              parsedNav: nav,
+            });
+          }
+        }
+      } else {
+        invalidLines++;
+        if (sampleInvalidLines.length < 3) {
+          sampleInvalidLines.push({
+            line: line.substring(0, 100) + "...",
+            parts: parts.length,
+            reason: "insufficient_parts",
+          });
+        }
+      }
+    }
+
+    res.json({
+      totalLines: lines.length,
+      validLines,
+      invalidLines,
+      sampleValidLines,
+      sampleInvalidLines,
+      message: `Found ${validLines} valid funds out of ${lines.length} lines`,
+    });
+  } catch (error) {
+    console.error("❌ Error testing NAV parsing:", error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Get database statistics for debugging
+ */
+app.get("/mf-stats", async (req, res) => {
+  try {
+    const totalFunds = await MutualFund.countDocuments();
+    const sampleFunds = await MutualFund.find().limit(5);
+    const lastUpdated = await MutualFund.findOne().sort({ lastUpdated: -1 });
+
+    res.json({
+      totalFunds,
+      sampleFunds,
+      lastUpdated: lastUpdated?.lastUpdated,
+      message: `Database contains ${totalFunds} mutual funds`,
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
