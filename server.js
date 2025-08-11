@@ -1652,9 +1652,10 @@ app.get("/mutualfunds/companies", async (req, res) => {
           _id: "$companyName",
           schemes: {
             $push: {
-              scheme_code: "$scheme_code",
+              // Map backend field names to frontend expected camelCase
+              schemeCode: "$scheme_code",
               isin_div_payout_or_growth: "$isin_div_payout_or_growth",
-              scheme_name: "$scheme_name",
+              schemeName: "$scheme_name",
               nav: "$nav",
               date: "$date",
               lastUpdated: "$lastUpdated",
@@ -1684,6 +1685,7 @@ app.get("/mutualfunds/companies", async (req, res) => {
 /**
  * Get a paginated list of all mutual funds.
  * Supports server-side search by scheme name.
+ * Maps field names from backend format to frontend expected camelCase.
  */
 app.get("/mutualfunds", async (req, res) => {
   try {
@@ -1700,8 +1702,19 @@ app.get("/mutualfunds", async (req, res) => {
       .skip((page - 1) * limit)
       .limit(limit);
 
+    // Map field names to frontend expected camelCase
+    const mappedFunds = funds.map((fund) => ({
+      _id: fund._id,
+      schemeCode: fund.scheme_code,
+      isin_div_payout_or_growth: fund.isin_div_payout_or_growth,
+      schemeName: fund.scheme_name,
+      nav: fund.nav,
+      date: fund.date,
+      lastUpdated: fund.lastUpdated,
+    }));
+
     res.json({
-      funds,
+      funds: mappedFunds,
       totalPages: Math.ceil(totalFunds / limit),
       currentPage: page,
       totalFunds,
@@ -1713,16 +1726,29 @@ app.get("/mutualfunds", async (req, res) => {
 
 /**
  * Get details for a single mutual fund by its scheme code.
+ * Maps field names from backend format to frontend expected camelCase.
  */
 app.get("/mutualfunds/:schemeCode", async (req, res) => {
   try {
     const fund = await MutualFund.findOne({
-      schemeCode: req.params.schemeCode,
+      scheme_code: req.params.schemeCode,
     });
     if (!fund) {
       return res.status(404).json({ error: "Mutual fund not found" });
     }
-    res.json(fund);
+
+    // Map field names to frontend expected camelCase
+    const mappedFund = {
+      _id: fund._id,
+      schemeCode: fund.scheme_code,
+      isin_div_payout_or_growth: fund.isin_div_payout_or_growth,
+      schemeName: fund.scheme_name,
+      nav: fund.nav,
+      date: fund.date,
+      lastUpdated: fund.lastUpdated,
+    };
+
+    res.json(mappedFund);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
