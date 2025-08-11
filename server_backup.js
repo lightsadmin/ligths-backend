@@ -1864,7 +1864,7 @@ app.post("/update-nav", async (req, res) => {
     console.log("❌ Token verification failed:", error.message);
     res.status(400).json({ error: "Invalid token." });
   }
-};
+
 
 // --- Investment API Endpoints ---
 
