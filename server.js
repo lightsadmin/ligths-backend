@@ -1641,6 +1641,13 @@ app.get("/mutualfunds/companies", async (req, res) => {
     const totalCount = await MutualFund.countDocuments({});
     console.log(`📊 Total MutualFund documents in DB: ${totalCount}`);
 
+    // Debug: Check a few sample scheme names to understand the data format
+    const sampleDocs = await MutualFund.find({}).limit(5);
+    console.log("📋 Sample scheme names:");
+    sampleDocs.forEach((doc, index) => {
+      console.log(`  ${index + 1}. ${doc.scheme_name}`);
+    });
+
     if (totalCount === 0) {
       console.log("⚠️ No mutual fund data found, attempting to fetch...");
       await fetchAndStoreNAVData();
@@ -1658,14 +1665,50 @@ app.get("/mutualfunds/companies", async (req, res) => {
     const pipeline = [
       {
         $addFields: {
+          // Extract company name - try different patterns
           companyName: {
             $trim: {
-              input: { $arrayElemAt: [{ $split: ["$scheme_name", " - "] }, 0] },
+              input: {
+                $cond: {
+                  if: { $gt: [{ $indexOfBytes: ["$scheme_name", " - "] }, -1] },
+                  // If " - " exists, take everything before it
+                  then: {
+                    $substr: [
+                      "$scheme_name",
+                      0,
+                      { $indexOfBytes: ["$scheme_name", " - "] },
+                    ],
+                  },
+                  // Otherwise, take first few words
+                  else: {
+                    $reduce: {
+                      input: {
+                        $slice: [{ $split: ["$scheme_name", " "] }, 0, 3],
+                      },
+                      initialValue: "",
+                      in: {
+                        $cond: {
+                          if: { $eq: ["$$value", ""] },
+                          then: "$$this",
+                          else: { $concat: ["$$value", " ", "$$this"] },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
             },
           },
         },
       },
-      { $match: { companyName: { $regex: search, $options: "i" } } },
+      {
+        $match: {
+          companyName: { $regex: search, $options: "i" },
+          scheme_name: { $exists: true, $ne: "" },
+          nav: { $exists: true, $ne: "-", $ne: "" },
+          companyName: { $ne: "" },
+        },
+      },
       {
         $group: {
           _id: "$companyName",
@@ -1692,6 +1735,7 @@ app.get("/mutualfunds/companies", async (req, res) => {
         },
       },
       { $sort: { companyName: 1 } },
+      { $limit: 100 }, // Increase limit to show more companies
     ];
 
     const companies = await MutualFund.aggregate(pipeline);
