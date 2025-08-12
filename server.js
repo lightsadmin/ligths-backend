@@ -68,6 +68,16 @@ const investmentSchema = new mongoose.Schema({
   stockSymbol: { type: String }, // e.g., "AAPL", "MSFT"
   stockQuantity: { type: Number }, // Number of shares (can be negative for sells)
   stockPrice: { type: Number }, // Price per share when bought/sold
+  // Mutual Fund specific fields
+  schemeCode: { type: String }, // MF scheme code
+  schemeName: { type: String }, // Full scheme name
+  units: { type: Number }, // Number of units purchased
+  nav: { type: Number }, // NAV at purchase
+  currentNAV: { type: Number }, // Current NAV
+  averageNAV: { type: Number }, // Average NAV for SIP investments
+  sipDate: { type: Number }, // SIP date (1-31)
+  calculationType: { type: String }, // "SIP" or "LUMPSUM"
+  investmentDate: { type: Date }, // Investment date
 });
 
 const Investment = mongoose.model("Investment", investmentSchema);
@@ -1661,43 +1671,101 @@ fetchAndStoreNAVData();
 app.get("/mutualfunds/companies", async (req, res) => {
   try {
     const search = req.query.search || "";
-    const pipeline = [
-      {
-        $addFields: {
-          companyName: {
-            $trim: {
-              input: { $arrayElemAt: [{ $split: ["$schemeName", " - "] }, 0] },
-            },
-          },
-        },
-      },
-      { $match: { companyName: { $regex: search, $options: "i" } } },
-      {
-        $group: {
-          _id: "$companyName",
-          schemes: {
-            $push: {
-              schemeCode: "$schemeCode",
-              schemeName: "$schemeName",
-              nav: "$nav",
-              lastUpdated: "$lastUpdated",
-            },
-          },
-          lastUpdated: { $max: "$lastUpdated" },
-        },
-      },
-      {
-        $project: {
-          _id: 0,
-          companyName: "$_id",
-          schemes: "$schemes",
-          lastUpdated: "$lastUpdated",
-        },
-      },
-      { $sort: { companyName: 1 } },
-    ];
-    const companies = await MutualFund.aggregate(pipeline);
+    
+    // First, get all mutual funds
+    const allFunds = await MutualFund.find({}, {
+      schemeCode: 1,
+      schemeName: 1,
+      nav: 1,
+      lastUpdated: 1
+    });
+
+    // Function to extract company name from scheme name
+    const extractCompanyName = (schemeName) => {
+      // Common company name patterns in Indian mutual funds
+      const commonCompanies = [
+        'ADITYA BIRLA SUN LIFE', 'AXIS', 'BAJAJ FINSERV', 'BANDHAN', 'BARODA BNP PARIBAS',
+        'BOI AXA', 'CANARA ROBECO', 'DSP', 'EDELWEISS', 'FRANKLIN TEMPLETON',
+        'HDFC', 'ICICI PRUDENTIAL', 'IDBI', 'IDFC', 'INVESCO', 'ITI', 'KOTAK',
+        'L&T', 'LIC', 'MAHINDRA', 'MIRAE ASSET', 'MOTILAL OSWAL', 'NIPPON INDIA',
+        'PARAG PARIKH', 'PGIM', 'QUANTUM', 'QUANT', 'RELIANCE', 'SAHARA', 'SBI',
+        'SHRIRAM', 'SUNDARAM', 'TATA', 'UNION', 'UTI', 'YES FUND', '360 ONE',
+        'GROWW', 'ZERODHA', 'NAVI'
+      ];
+
+      const upperSchemeName = schemeName.toUpperCase();
+      
+      // Try to match known company names first
+      for (const company of commonCompanies) {
+        if (upperSchemeName.startsWith(company)) {
+          return company;
+        }
+      }
+      
+      // Fallback: Extract first few words as company name
+      // Remove common fund-related words and extract meaningful company name
+      let companyName = schemeName
+        .replace(/\s+(MUTUAL\s+FUND|FUND|SCHEME|PLAN|DIRECT|REGULAR|GROWTH|DIVIDEND|IDCW)\b/gi, ' ')
+        .trim();
+      
+      // Take first 2-3 words as company name
+      const words = companyName.split(/\s+/);
+      companyName = words.slice(0, Math.min(3, words.length)).join(' ');
+      
+      return companyName.toUpperCase();
+    };
+
+    // Group funds by company
+    const companiesMap = new Map();
+    
+    allFunds.forEach(fund => {
+      const companyName = extractCompanyName(fund.schemeName);
+      
+      if (!companiesMap.has(companyName)) {
+        companiesMap.set(companyName, {
+          companyName: companyName,
+          fundCount: 0,
+          schemes: [],
+          lastUpdated: fund.lastUpdated
+        });
+      }
+      
+      const company = companiesMap.get(companyName);
+      company.fundCount++;
+      company.schemes.push({
+        schemeCode: fund.schemeCode,
+        schemeName: fund.schemeName,
+        nav: fund.nav,
+        lastUpdated: fund.lastUpdated
+      });
+      
+      // Update last updated date
+      if (fund.lastUpdated > company.lastUpdated) {
+        company.lastUpdated = fund.lastUpdated;
+      }
+    });
+
+    // Convert Map to Array and apply search filter
+    let companies = Array.from(companiesMap.values());
+    
+    if (search) {
+      companies = companies.filter(company => 
+        company.companyName.toLowerCase().includes(search.toLowerCase())
+      );
+    }
+    
+    // Sort by company name
+    companies.sort((a, b) => a.companyName.localeCompare(b.companyName));
+    
+    console.log(`📊 Found ${companies.length} unique companies from ${allFunds.length} funds`);
+    console.log(`📊 Sample companies: ${companies.slice(0, 5).map(c => `${c.companyName} (${c.fundCount} funds)`).join(', ')}`);
+    
     res.json(companies);
+  } catch (err) {
+    console.error("❌ Error fetching companies:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
   } catch (error) {
     console.error("Error fetching grouped mutual funds:", error.message);
     res.status(500).json({ error: "Internal Server Error" });
@@ -1927,6 +1995,16 @@ app.post("/investment", verifyToken, async (req, res) => {
       compoundingFrequency,
       monthlyDeposit,
       duration,
+      // MF specific fields
+      schemeCode,
+      schemeName,
+      units,
+      nav,
+      currentNAV,
+      averageNAV,
+      sipDate,
+      calculationType,
+      investmentDate,
     } = req.body;
 
     // Basic validation
@@ -1942,13 +2020,25 @@ app.post("/investment", verifyToken, async (req, res) => {
         .json({ error: "Missing required investment fields." });
     }
 
-    const newInvestment = new Investment({
+    // Additional validation for Mutual Fund investments
+    if (investmentType === "Mutual Fund") {
+      if (!schemeCode || !schemeName || !units || !nav) {
+        return res
+          .status(400)
+          .json({
+            error:
+              "Missing required Mutual Fund fields: schemeCode, schemeName, units, nav",
+          });
+      }
+    }
+
+    const investmentData = {
       name,
       amount: parseFloat(amount),
       currentAmount: parseFloat(amount),
       interestRate: parseFloat(interestRate),
       investmentType,
-      startDate: new Date(),
+      startDate: investmentDate ? new Date(investmentDate) : new Date(),
       maturityDate,
       description,
       goalId,
@@ -1956,7 +2046,30 @@ app.post("/investment", verifyToken, async (req, res) => {
       monthlyDeposit,
       duration,
       userName: req.user.userName,
-    });
+    };
+
+    // Add MF specific fields if it's a Mutual Fund investment
+    if (investmentType === "Mutual Fund") {
+      investmentData.schemeCode = schemeCode;
+      investmentData.schemeName = schemeName;
+      investmentData.units = parseFloat(units);
+      investmentData.nav = parseFloat(nav);
+      investmentData.currentNAV = parseFloat(currentNAV) || parseFloat(nav);
+      investmentData.averageNAV = parseFloat(averageNAV) || parseFloat(nav);
+      investmentData.sipDate = sipDate ? parseInt(sipDate) : null;
+      investmentData.calculationType = calculationType;
+      investmentData.investmentDate = investmentDate
+        ? new Date(investmentDate)
+        : new Date();
+
+      // Calculate current amount for MF based on units and current NAV
+      if (investmentData.units && investmentData.currentNAV) {
+        investmentData.currentAmount =
+          investmentData.units * investmentData.currentNAV;
+      }
+    }
+
+    const newInvestment = new Investment(investmentData);
 
     await newInvestment.save();
 
@@ -2017,6 +2130,248 @@ app.delete("/investment/:id", verifyToken, async (req, res) => {
     res.json({ message: "Investment deleted" });
   } catch (err) {
     res.status(500).json(err);
+  }
+});
+
+// --- Mutual Fund Investment CRUD Operations ---
+
+/**
+ * Get all MF investments for a user
+ */
+app.get("/mf-investments", verifyToken, async (req, res) => {
+  try {
+    console.log("📊 Getting MF investments for user:", req.user.userName);
+
+    const userName = req.user.userName;
+    const mfInvestments = await Investment.find({
+      userName: userName,
+      investmentType: "Mutual Fund",
+    });
+    console.log("📊 Found MF investments:", mfInvestments.length);
+
+    res.json(mfInvestments);
+  } catch (err) {
+    console.error("❌ Error fetching MF investments:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Create a new MF investment
+ */
+app.post("/mf-investment", verifyToken, async (req, res) => {
+  try {
+    console.log("💰 Creating MF investment for user:", req.user.userName);
+    console.log("💰 Received MF Investment data:", req.body);
+
+    const {
+      schemeCode,
+      schemeName,
+      amount,
+      units,
+      nav,
+      currentNAV,
+      averageNAV,
+      sipDate,
+      calculationType,
+      investmentDate,
+      interestRate,
+    } = req.body;
+
+    // Basic validation
+    if (!schemeCode || !schemeName || !amount || !units || !nav) {
+      return res
+        .status(400)
+        .json({ error: "Missing required MF investment fields." });
+    }
+
+    const newMFInvestment = new Investment({
+      name: schemeName,
+      amount: parseFloat(amount),
+      currentAmount: parseFloat(amount), // Initial current amount equals investment amount
+      interestRate: parseFloat(interestRate) || 12, // Default expected return
+      investmentType: "Mutual Fund",
+      startDate: investmentDate ? new Date(investmentDate) : new Date(),
+      userName: req.user.userName,
+      // MF specific fields
+      schemeCode,
+      schemeName,
+      units: parseFloat(units),
+      nav: parseFloat(nav),
+      currentNAV: parseFloat(currentNAV) || parseFloat(nav),
+      averageNAV: parseFloat(averageNAV) || parseFloat(nav),
+      sipDate: sipDate ? parseInt(sipDate) : null,
+      calculationType,
+      investmentDate: investmentDate ? new Date(investmentDate) : new Date(),
+    });
+
+    await newMFInvestment.save();
+
+    console.log("✅ MF Investment created successfully:", newMFInvestment._id);
+    res.status(201).json(newMFInvestment);
+  } catch (err) {
+    console.error("❌ Error creating MF investment:", err);
+    res
+      .status(500)
+      .json({ error: err.message || "Failed to add MF investment" });
+  }
+});
+
+/**
+ * Update an MF investment
+ */
+app.put("/mf-investment/:id", verifyToken, async (req, res) => {
+  try {
+    const userName = req.user.userName;
+    const mfInvestment = await Investment.findOne({
+      _id: req.params.id,
+      userName: userName,
+      investmentType: "Mutual Fund",
+    });
+
+    if (!mfInvestment) {
+      return res
+        .status(404)
+        .json({ error: "MF Investment not found or not authorized" });
+    }
+
+    // If updating amount/units, recalculate current amount
+    const updateData = { ...req.body };
+    if (updateData.units && updateData.currentNAV) {
+      updateData.currentAmount =
+        parseFloat(updateData.units) * parseFloat(updateData.currentNAV);
+    }
+
+    const updatedMFInvestment = await Investment.findByIdAndUpdate(
+      req.params.id,
+      updateData,
+      { new: true }
+    );
+
+    console.log(
+      "✅ MF Investment updated successfully:",
+      updatedMFInvestment._id
+    );
+    res.json(updatedMFInvestment);
+  } catch (err) {
+    console.error("❌ Error updating MF investment:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Delete an MF investment
+ */
+app.delete("/mf-investment/:id", verifyToken, async (req, res) => {
+  try {
+    const userName = req.user.userName;
+    const mfInvestment = await Investment.findOne({
+      _id: req.params.id,
+      userName: userName,
+      investmentType: "Mutual Fund",
+    });
+
+    if (!mfInvestment) {
+      return res
+        .status(404)
+        .json({ error: "MF Investment not found or not authorized" });
+    }
+
+    await Investment.findByIdAndDelete(req.params.id);
+    console.log("✅ MF Investment deleted successfully:", req.params.id);
+    res.json({ message: "MF Investment deleted successfully" });
+  } catch (err) {
+    console.error("❌ Error deleting MF investment:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Get MF investment by scheme code for a user
+ */
+app.get("/mf-investment/scheme/:schemeCode", verifyToken, async (req, res) => {
+  try {
+    const userName = req.user.userName;
+    const { schemeCode } = req.params;
+
+    const mfInvestment = await Investment.findOne({
+      userName: userName,
+      schemeCode: schemeCode,
+      investmentType: "Mutual Fund",
+    });
+
+    if (!mfInvestment) {
+      return res.status(404).json({ error: "MF Investment not found" });
+    }
+
+    res.json(mfInvestment);
+  } catch (err) {
+    console.error("❌ Error fetching MF investment by scheme code:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Update NAV values for all MF investments
+ */
+app.post("/mf-investments/update-nav", verifyToken, async (req, res) => {
+  try {
+    const userName = req.user.userName;
+
+    // Get all MF investments for the user
+    const mfInvestments = await Investment.find({
+      userName: userName,
+      investmentType: "Mutual Fund",
+    });
+
+    const updatePromises = mfInvestments.map(async (investment) => {
+      if (investment.schemeCode) {
+        try {
+          // Find the latest NAV for this scheme
+          const fund = await MutualFund.findOne({
+            schemeCode: investment.schemeCode,
+          });
+
+          if (fund && fund.nav) {
+            const newCurrentAmount = investment.units * parseFloat(fund.nav);
+
+            await Investment.findByIdAndUpdate(investment._id, {
+              currentNAV: parseFloat(fund.nav),
+              currentAmount: newCurrentAmount,
+              lastInterestUpdate: new Date(),
+            });
+
+            return {
+              schemeCode: investment.schemeCode,
+              schemeName: investment.schemeName,
+              updatedNAV: fund.nav,
+              updatedAmount: newCurrentAmount,
+            };
+          }
+        } catch (err) {
+          console.error(
+            `❌ Error updating NAV for ${investment.schemeCode}:`,
+            err
+          );
+          return null;
+        }
+      }
+      return null;
+    });
+
+    const results = await Promise.all(updatePromises);
+    const successfulUpdates = results.filter((result) => result !== null);
+
+    console.log(
+      `✅ Updated NAV for ${successfulUpdates.length} MF investments`
+    );
+    res.json({
+      message: `Successfully updated NAV for ${successfulUpdates.length} investments`,
+      updates: successfulUpdates,
+    });
+  } catch (err) {
+    console.error("❌ Error updating MF investment NAVs:", err);
+    res.status(500).json({ error: err.message });
   }
 });
 
