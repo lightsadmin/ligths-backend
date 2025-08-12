@@ -1671,74 +1671,113 @@ fetchAndStoreNAVData();
 app.get("/mutualfunds/companies", async (req, res) => {
   try {
     const search = req.query.search || "";
-    
+
     // First, get all mutual funds
-    const allFunds = await MutualFund.find({}, {
-      schemeCode: 1,
-      schemeName: 1,
-      nav: 1,
-      lastUpdated: 1
-    });
+    const allFunds = await MutualFund.find(
+      {},
+      {
+        schemeCode: 1,
+        schemeName: 1,
+        nav: 1,
+        lastUpdated: 1,
+      }
+    );
 
     // Function to extract company name from scheme name
     const extractCompanyName = (schemeName) => {
       // Common company name patterns in Indian mutual funds
       const commonCompanies = [
-        'ADITYA BIRLA SUN LIFE', 'AXIS', 'BAJAJ FINSERV', 'BANDHAN', 'BARODA BNP PARIBAS',
-        'BOI AXA', 'CANARA ROBECO', 'DSP', 'EDELWEISS', 'FRANKLIN TEMPLETON',
-        'HDFC', 'ICICI PRUDENTIAL', 'IDBI', 'IDFC', 'INVESCO', 'ITI', 'KOTAK',
-        'L&T', 'LIC', 'MAHINDRA', 'MIRAE ASSET', 'MOTILAL OSWAL', 'NIPPON INDIA',
-        'PARAG PARIKH', 'PGIM', 'QUANTUM', 'QUANT', 'RELIANCE', 'SAHARA', 'SBI',
-        'SHRIRAM', 'SUNDARAM', 'TATA', 'UNION', 'UTI', 'YES FUND', '360 ONE',
-        'GROWW', 'ZERODHA', 'NAVI'
+        "ADITYA BIRLA SUN LIFE",
+        "AXIS",
+        "BAJAJ FINSERV",
+        "BANDHAN",
+        "BARODA BNP PARIBAS",
+        "BOI AXA",
+        "CANARA ROBECO",
+        "DSP",
+        "EDELWEISS",
+        "FRANKLIN TEMPLETON",
+        "HDFC",
+        "ICICI PRUDENTIAL",
+        "IDBI",
+        "IDFC",
+        "INVESCO",
+        "ITI",
+        "KOTAK",
+        "L&T",
+        "LIC",
+        "MAHINDRA",
+        "MIRAE ASSET",
+        "MOTILAL OSWAL",
+        "NIPPON INDIA",
+        "PARAG PARIKH",
+        "PGIM",
+        "QUANTUM",
+        "QUANT",
+        "RELIANCE",
+        "SAHARA",
+        "SBI",
+        "SHRIRAM",
+        "SUNDARAM",
+        "TATA",
+        "UNION",
+        "UTI",
+        "YES FUND",
+        "360 ONE",
+        "GROWW",
+        "ZERODHA",
+        "NAVI",
       ];
 
       const upperSchemeName = schemeName.toUpperCase();
-      
+
       // Try to match known company names first
       for (const company of commonCompanies) {
         if (upperSchemeName.startsWith(company)) {
           return company;
         }
       }
-      
+
       // Fallback: Extract first few words as company name
       // Remove common fund-related words and extract meaningful company name
       let companyName = schemeName
-        .replace(/\s+(MUTUAL\s+FUND|FUND|SCHEME|PLAN|DIRECT|REGULAR|GROWTH|DIVIDEND|IDCW)\b/gi, ' ')
+        .replace(
+          /\s+(MUTUAL\s+FUND|FUND|SCHEME|PLAN|DIRECT|REGULAR|GROWTH|DIVIDEND|IDCW)\b/gi,
+          " "
+        )
         .trim();
-      
+
       // Take first 2-3 words as company name
       const words = companyName.split(/\s+/);
-      companyName = words.slice(0, Math.min(3, words.length)).join(' ');
-      
+      companyName = words.slice(0, Math.min(3, words.length)).join(" ");
+
       return companyName.toUpperCase();
     };
 
     // Group funds by company
     const companiesMap = new Map();
-    
-    allFunds.forEach(fund => {
+
+    allFunds.forEach((fund) => {
       const companyName = extractCompanyName(fund.schemeName);
-      
+
       if (!companiesMap.has(companyName)) {
         companiesMap.set(companyName, {
           companyName: companyName,
           fundCount: 0,
           schemes: [],
-          lastUpdated: fund.lastUpdated
+          lastUpdated: fund.lastUpdated,
         });
       }
-      
+
       const company = companiesMap.get(companyName);
       company.fundCount++;
       company.schemes.push({
         schemeCode: fund.schemeCode,
         schemeName: fund.schemeName,
         nav: fund.nav,
-        lastUpdated: fund.lastUpdated
+        lastUpdated: fund.lastUpdated,
       });
-      
+
       // Update last updated date
       if (fund.lastUpdated > company.lastUpdated) {
         company.lastUpdated = fund.lastUpdated;
@@ -1747,28 +1786,30 @@ app.get("/mutualfunds/companies", async (req, res) => {
 
     // Convert Map to Array and apply search filter
     let companies = Array.from(companiesMap.values());
-    
+
     if (search) {
-      companies = companies.filter(company => 
+      companies = companies.filter((company) =>
         company.companyName.toLowerCase().includes(search.toLowerCase())
       );
     }
-    
+
     // Sort by company name
     companies.sort((a, b) => a.companyName.localeCompare(b.companyName));
-    
-    console.log(`📊 Found ${companies.length} unique companies from ${allFunds.length} funds`);
-    console.log(`📊 Sample companies: ${companies.slice(0, 5).map(c => `${c.companyName} (${c.fundCount} funds)`).join(', ')}`);
-    
+
+    console.log(
+      `📊 Found ${companies.length} unique companies from ${allFunds.length} funds`
+    );
+    console.log(
+      `📊 Sample companies: ${companies
+        .slice(0, 5)
+        .map((c) => `${c.companyName} (${c.fundCount} funds)`)
+        .join(", ")}`
+    );
+
     res.json(companies);
   } catch (err) {
     console.error("❌ Error fetching companies:", err);
     res.status(500).json({ error: err.message });
-  }
-});
-  } catch (error) {
-    console.error("Error fetching grouped mutual funds:", error.message);
-    res.status(500).json({ error: "Internal Server Error" });
   }
 });
 
@@ -2023,12 +2064,10 @@ app.post("/investment", verifyToken, async (req, res) => {
     // Additional validation for Mutual Fund investments
     if (investmentType === "Mutual Fund") {
       if (!schemeCode || !schemeName || !units || !nav) {
-        return res
-          .status(400)
-          .json({
-            error:
-              "Missing required Mutual Fund fields: schemeCode, schemeName, units, nav",
-          });
+        return res.status(400).json({
+          error:
+            "Missing required Mutual Fund fields: schemeCode, schemeName, units, nav",
+        });
       }
     }
 
