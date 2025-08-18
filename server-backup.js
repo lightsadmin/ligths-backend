@@ -6,7 +6,7 @@ const bodyParser = require("body-parser");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken"); //n
 const axios = require("axios");
-const yahooFinance = require("yahoo-finance2").default;
+const yahooFinance = require('yahoo-finance2').default;
 const cron = require("node-cron");
 // const nodemailer = require("nodemailer"); // Removed - no longer needed
 // const crypto = require("crypto"); // Removed - no longer needed
@@ -2427,11 +2427,11 @@ app.get("/api/stock-quote/:symbol", async (req, res) => {
 
     // Fetch quote using yahoo-finance2
     const quote = await yahooFinance.quote(symbol);
-
+    
     if (!quote) {
       return res.status(404).json({
         error: "Stock not found",
-        symbol: symbol,
+        symbol: symbol
       });
     }
 
@@ -2439,9 +2439,7 @@ app.get("/api/stock-quote/:symbol", async (req, res) => {
     const currentPrice = quote.regularMarketPrice || 0;
     const previousClose = quote.regularMarketPreviousClose || 0;
     const change = currentPrice - previousClose;
-    const percentChange = previousClose
-      ? ((change / previousClose) * 100).toFixed(2)
-      : 0;
+    const percentChange = previousClose ? ((change / previousClose) * 100).toFixed(2) : 0;
 
     // Determine currency based on exchange
     let currency = "USD";
@@ -2465,10 +2463,7 @@ app.get("/api/stock-quote/:symbol", async (req, res) => {
         exchange: quote.fullExchangeName || quote.exchange || "Unknown",
         currency: currency,
         marketCap: quote.marketCap || 0,
-        country:
-          symbol.includes(".NS") || symbol.includes(".BO")
-            ? "India"
-            : "United States",
+        country: symbol.includes(".NS") || symbol.includes(".BO") ? "India" : "United States"
       },
       percentChange: parseFloat(percentChange),
       change: change,
@@ -2508,7 +2503,7 @@ app.post("/api/stock-quotes", async (req, res) => {
     const promises = symbols.map(async (symbol) => {
       try {
         const quote = await yahooFinance.quote(symbol);
-
+        
         if (!quote) {
           return {
             symbol,
@@ -2523,9 +2518,7 @@ app.post("/api/stock-quotes", async (req, res) => {
         const currentPrice = quote.regularMarketPrice || 0;
         const previousClose = quote.regularMarketPreviousClose || 0;
         const change = currentPrice - previousClose;
-        const percentChange = previousClose
-          ? ((change / previousClose) * 100).toFixed(2)
-          : 0;
+        const percentChange = previousClose ? ((change / previousClose) * 100).toFixed(2) : 0;
 
         // Determine currency based on exchange
         let currency = "USD";
@@ -2549,10 +2542,7 @@ app.post("/api/stock-quotes", async (req, res) => {
             exchange: quote.fullExchangeName || quote.exchange || "Unknown",
             currency: currency,
             marketCap: quote.marketCap || 0,
-            country:
-              symbol.includes(".NS") || symbol.includes(".BO")
-                ? "India"
-                : "United States",
+            country: symbol.includes(".NS") || symbol.includes(".BO") ? "India" : "United States"
           },
           percentChange: parseFloat(percentChange),
           change: change,
@@ -2571,12 +2561,8 @@ app.post("/api/stock-quotes", async (req, res) => {
     });
 
     const results = await Promise.all(promises);
-    console.log(
-      `Successfully fetched ${results.filter((r) => !r.error).length} out of ${
-        symbols.length
-      } quotes`
-    );
-
+    console.log(`Successfully fetched ${results.filter(r => !r.error).length} out of ${symbols.length} quotes`);
+    
     res.json({ data: results });
   } catch (error) {
     console.error("Error fetching multiple stock quotes:", error);
@@ -2763,13 +2749,7 @@ app.delete("/api/stock-transactions/:transactionId", async (req, res) => {
  */
 app.get("/api/stock-companies", async (req, res) => {
   try {
-    const {
-      search,
-      exchange = "INDIA",
-      country,
-      page = 1,
-      limit = 1000,
-    } = req.query;
+    const { search, exchange = "INDIA", country, page = 1, limit = 1000 } = req.query;
 
     console.log(`Fetching stocks for exchange: ${exchange}, search: ${search}`);
 
@@ -2779,608 +2759,96 @@ app.get("/api/stock-companies", async (req, res) => {
       // Fetch Indian stocks using popular NSE/BSE symbols
       const indianStocks = [
         // Top NSE/BSE stocks with company names
-        {
-          symbol: "RELIANCE.NS",
-          name: "Reliance Industries Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "TCS.NS",
-          name: "Tata Consultancy Services Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "HDFCBANK.NS",
-          name: "HDFC Bank Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "ICICIBANK.NS",
-          name: "ICICI Bank Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "HINDUNILVR.NS",
-          name: "Hindustan Unilever Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "INFY.NS",
-          name: "Infosys Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "ITC.NS",
-          name: "ITC Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "HDFC.NS",
-          name: "Housing Development Finance Corporation Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "KOTAKBANK.NS",
-          name: "Kotak Mahindra Bank Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "LT.NS",
-          name: "Larsen & Toubro Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "BAJFINANCE.NS",
-          name: "Bajaj Finance Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "SBIN.NS",
-          name: "State Bank of India",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "BHARTIARTL.NS",
-          name: "Bharti Airtel Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "ASIANPAINT.NS",
-          name: "Asian Paints Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "MARUTI.NS",
-          name: "Maruti Suzuki India Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "HCLTECH.NS",
-          name: "HCL Technologies Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "AXISBANK.NS",
-          name: "Axis Bank Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "WIPRO.NS",
-          name: "Wipro Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "ONGC.NS",
-          name: "Oil and Natural Gas Corporation Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "TECHM.NS",
-          name: "Tech Mahindra Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "TITAN.NS",
-          name: "Titan Company Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "NESTLEIND.NS",
-          name: "Nestle India Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "POWERGRID.NS",
-          name: "Power Grid Corporation of India Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "NTPC.NS",
-          name: "NTPC Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "ULTRACEMCO.NS",
-          name: "UltraTech Cement Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "JSWSTEEL.NS",
-          name: "JSW Steel Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "M&M.NS",
-          name: "Mahindra & Mahindra Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "SUNPHARMA.NS",
-          name: "Sun Pharmaceutical Industries Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "BAJAJFINSV.NS",
-          name: "Bajaj Finserv Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "DRREDDY.NS",
-          name: "Dr. Reddy's Laboratories Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "TATAMOTORS.NS",
-          name: "Tata Motors Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "CIPLA.NS",
-          name: "Cipla Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "EICHERMOT.NS",
-          name: "Eicher Motors Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "GRASIM.NS",
-          name: "Grasim Industries Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "HEROMOTOCO.NS",
-          name: "Hero MotoCorp Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "COALINDIA.NS",
-          name: "Coal India Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "BPCL.NS",
-          name: "Bharat Petroleum Corporation Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "TATASTEEL.NS",
-          name: "Tata Steel Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "BRITANNIA.NS",
-          name: "Britannia Industries Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "DIVISLAB.NS",
-          name: "Divi's Laboratories Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "ADANIPORTS.NS",
-          name: "Adani Ports and Special Economic Zone Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "SHREECEM.NS",
-          name: "Shree Cement Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "VEDL.NS",
-          name: "Vedanta Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "APOLLOHOSP.NS",
-          name: "Apollo Hospitals Enterprise Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "HINDALCO.NS",
-          name: "Hindalco Industries Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "INDUSINDBK.NS",
-          name: "IndusInd Bank Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "UPL.NS",
-          name: "UPL Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "TATACONSUM.NS",
-          name: "Tata Consumer Products Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "ADANIENT.NS",
-          name: "Adani Enterprises Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "GODREJCP.NS",
-          name: "Godrej Consumer Products Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "SBILIFE.NS",
-          name: "SBI Life Insurance Company Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "PIDILITIND.NS",
-          name: "Pidilite Industries Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "HDFCLIFE.NS",
-          name: "HDFC Life Insurance Company Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
+        { symbol: "RELIANCE.NS", name: "Reliance Industries Limited", exchange: "NSE", currency: "INR", country: "India", type: "Common Stock" },
+        { symbol: "TCS.NS", name: "Tata Consultancy Services Limited", exchange: "NSE", currency: "INR", country: "India", type: "Common Stock" },
+        { symbol: "HDFCBANK.NS", name: "HDFC Bank Limited", exchange: "NSE", currency: "INR", country: "India", type: "Common Stock" },
+        { symbol: "ICICIBANK.NS", name: "ICICI Bank Limited", exchange: "NSE", currency: "INR", country: "India", type: "Common Stock" },
+        { symbol: "HINDUNILVR.NS", name: "Hindustan Unilever Limited", exchange: "NSE", currency: "INR", country: "India", type: "Common Stock" },
+        { symbol: "INFY.NS", name: "Infosys Limited", exchange: "NSE", currency: "INR", country: "India", type: "Common Stock" },
+        { symbol: "ITC.NS", name: "ITC Limited", exchange: "NSE", currency: "INR", country: "India", type: "Common Stock" },
+        { symbol: "HDFC.NS", name: "Housing Development Finance Corporation Limited", exchange: "NSE", currency: "INR", country: "India", type: "Common Stock" },
+        { symbol: "KOTAKBANK.NS", name: "Kotak Mahindra Bank Limited", exchange: "NSE", currency: "INR", country: "India", type: "Common Stock" },
+        { symbol: "LT.NS", name: "Larsen & Toubro Limited", exchange: "NSE", currency: "INR", country: "India", type: "Common Stock" },
+        { symbol: "BAJFINANCE.NS", name: "Bajaj Finance Limited", exchange: "NSE", currency: "INR", country: "India", type: "Common Stock" },
+        { symbol: "SBIN.NS", name: "State Bank of India", exchange: "NSE", currency: "INR", country: "India", type: "Common Stock" },
+        { symbol: "BHARTIARTL.NS", name: "Bharti Airtel Limited", exchange: "NSE", currency: "INR", country: "India", type: "Common Stock" },
+        { symbol: "ASIANPAINT.NS", name: "Asian Paints Limited", exchange: "NSE", currency: "INR", country: "India", type: "Common Stock" },
+        { symbol: "MARUTI.NS", name: "Maruti Suzuki India Limited", exchange: "NSE", currency: "INR", country: "India", type: "Common Stock" },
+        { symbol: "HCLTECH.NS", name: "HCL Technologies Limited", exchange: "NSE", currency: "INR", country: "India", type: "Common Stock" },
+        { symbol: "AXISBANK.NS", name: "Axis Bank Limited", exchange: "NSE", currency: "INR", country: "India", type: "Common Stock" },
+        { symbol: "WIPRO.NS", name: "Wipro Limited", exchange: "NSE", currency: "INR", country: "India", type: "Common Stock" },
+        { symbol: "ONGC.NS", name: "Oil and Natural Gas Corporation Limited", exchange: "NSE", currency: "INR", country: "India", type: "Common Stock" },
+        { symbol: "TECHM.NS", name: "Tech Mahindra Limited", exchange: "NSE", currency: "INR", country: "India", type: "Common Stock" },
+        { symbol: "TITAN.NS", name: "Titan Company Limited", exchange: "NSE", currency: "INR", country: "India", type: "Common Stock" },
+        { symbol: "NESTLEIND.NS", name: "Nestle India Limited", exchange: "NSE", currency: "INR", country: "India", type: "Common Stock" },
+        { symbol: "POWERGRID.NS", name: "Power Grid Corporation of India Limited", exchange: "NSE", currency: "INR", country: "India", type: "Common Stock" },
+        { symbol: "NTPC.NS", name: "NTPC Limited", exchange: "NSE", currency: "INR", country: "India", type: "Common Stock" },
+        { symbol: "ULTRACEMCO.NS", name: "UltraTech Cement Limited", exchange: "NSE", currency: "INR", country: "India", type: "Common Stock" },
+        { symbol: "JSWSTEEL.NS", name: "JSW Steel Limited", exchange: "NSE", currency: "INR", country: "India", type: "Common Stock" },
+        { symbol: "M&M.NS", name: "Mahindra & Mahindra Limited", exchange: "NSE", currency: "INR", country: "India", type: "Common Stock" },
+        { symbol: "SUNPHARMA.NS", name: "Sun Pharmaceutical Industries Limited", exchange: "NSE", currency: "INR", country: "India", type: "Common Stock" },
+        { symbol: "BAJAJFINSV.NS", name: "Bajaj Finserv Limited", exchange: "NSE", currency: "INR", country: "India", type: "Common Stock" },
+        { symbol: "DRREDDY.NS", name: "Dr. Reddy's Laboratories Limited", exchange: "NSE", currency: "INR", country: "India", type: "Common Stock" },
+        { symbol: "TATAMOTORS.NS", name: "Tata Motors Limited", exchange: "NSE", currency: "INR", country: "India", type: "Common Stock" },
+        { symbol: "CIPLA.NS", name: "Cipla Limited", exchange: "NSE", currency: "INR", country: "India", type: "Common Stock" },
+        { symbol: "EICHERMOT.NS", name: "Eicher Motors Limited", exchange: "NSE", currency: "INR", country: "India", type: "Common Stock" },
+        { symbol: "GRASIM.NS", name: "Grasim Industries Limited", exchange: "NSE", currency: "INR", country: "India", type: "Common Stock" },
+        { symbol: "HEROMOTOCO.NS", name: "Hero MotoCorp Limited", exchange: "NSE", currency: "INR", country: "India", type: "Common Stock" },
+        { symbol: "COALINDIA.NS", name: "Coal India Limited", exchange: "NSE", currency: "INR", country: "India", type: "Common Stock" },
+        { symbol: "BPCL.NS", name: "Bharat Petroleum Corporation Limited", exchange: "NSE", currency: "INR", country: "India", type: "Common Stock" },
+        { symbol: "TATASTEEL.NS", name: "Tata Steel Limited", exchange: "NSE", currency: "INR", country: "India", type: "Common Stock" },
+        { symbol: "BRITANNIA.NS", name: "Britannia Industries Limited", exchange: "NSE", currency: "INR", country: "India", type: "Common Stock" },
+        { symbol: "DIVISLAB.NS", name: "Divi's Laboratories Limited", exchange: "NSE", currency: "INR", country: "India", type: "Common Stock" },
+        { symbol: "ADANIPORTS.NS", name: "Adani Ports and Special Economic Zone Limited", exchange: "NSE", currency: "INR", country: "India", type: "Common Stock" },
+        { symbol: "SHREECEM.NS", name: "Shree Cement Limited", exchange: "NSE", currency: "INR", country: "India", type: "Common Stock" },
+        { symbol: "VEDL.NS", name: "Vedanta Limited", exchange: "NSE", currency: "INR", country: "India", type: "Common Stock" },
+        { symbol: "APOLLOHOSP.NS", name: "Apollo Hospitals Enterprise Limited", exchange: "NSE", currency: "INR", country: "India", type: "Common Stock" },
+        { symbol: "HINDALCO.NS", name: "Hindalco Industries Limited", exchange: "NSE", currency: "INR", country: "India", type: "Common Stock" },
+        { symbol: "INDUSINDBK.NS", name: "IndusInd Bank Limited", exchange: "NSE", currency: "INR", country: "India", type: "Common Stock" },
+        { symbol: "UPL.NS", name: "UPL Limited", exchange: "NSE", currency: "INR", country: "India", type: "Common Stock" },
+        { symbol: "TATACONSUM.NS", name: "Tata Consumer Products Limited", exchange: "NSE", currency: "INR", country: "India", type: "Common Stock" },
+        { symbol: "ADANIENT.NS", name: "Adani Enterprises Limited", exchange: "NSE", currency: "INR", country: "India", type: "Common Stock" },
+        { symbol: "GODREJCP.NS", name: "Godrej Consumer Products Limited", exchange: "NSE", currency: "INR", country: "India", type: "Common Stock" },
+        { symbol: "SBILIFE.NS", name: "SBI Life Insurance Company Limited", exchange: "NSE", currency: "INR", country: "India", type: "Common Stock" },
+        { symbol: "PIDILITIND.NS", name: "Pidilite Industries Limited", exchange: "NSE", currency: "INR", country: "India", type: "Common Stock" },
+        { symbol: "HDFCLIFE.NS", name: "HDFC Life Insurance Company Limited", exchange: "NSE", currency: "INR", country: "India", type: "Common Stock" }
       ];
-
+      
       stocks = indianStocks;
     } else {
       // For other exchanges, use the original Finnhub logic or provide common US stocks
       const usStocks = [
-        {
-          symbol: "AAPL",
-          name: "Apple Inc.",
-          exchange: "NASDAQ",
-          currency: "USD",
-          country: "United States",
-          type: "Common Stock",
-        },
-        {
-          symbol: "MSFT",
-          name: "Microsoft Corporation",
-          exchange: "NASDAQ",
-          currency: "USD",
-          country: "United States",
-          type: "Common Stock",
-        },
-        {
-          symbol: "GOOGL",
-          name: "Alphabet Inc.",
-          exchange: "NASDAQ",
-          currency: "USD",
-          country: "United States",
-          type: "Common Stock",
-        },
-        {
-          symbol: "AMZN",
-          name: "Amazon.com Inc.",
-          exchange: "NASDAQ",
-          currency: "USD",
-          country: "United States",
-          type: "Common Stock",
-        },
-        {
-          symbol: "TSLA",
-          name: "Tesla Inc.",
-          exchange: "NASDAQ",
-          currency: "USD",
-          country: "United States",
-          type: "Common Stock",
-        },
-        {
-          symbol: "META",
-          name: "Meta Platforms Inc.",
-          exchange: "NASDAQ",
-          currency: "USD",
-          country: "United States",
-          type: "Common Stock",
-        },
-        {
-          symbol: "NVDA",
-          name: "NVIDIA Corporation",
-          exchange: "NASDAQ",
-          currency: "USD",
-          country: "United States",
-          type: "Common Stock",
-        },
-        {
-          symbol: "JPM",
-          name: "JPMorgan Chase & Co.",
-          exchange: "NYSE",
-          currency: "USD",
-          country: "United States",
-          type: "Common Stock",
-        },
-        {
-          symbol: "JNJ",
-          name: "Johnson & Johnson",
-          exchange: "NYSE",
-          currency: "USD",
-          country: "United States",
-          type: "Common Stock",
-        },
-        {
-          symbol: "V",
-          name: "Visa Inc.",
-          exchange: "NYSE",
-          currency: "USD",
-          country: "United States",
-          type: "Common Stock",
-        },
-        {
-          symbol: "PG",
-          name: "The Procter & Gamble Company",
-          exchange: "NYSE",
-          currency: "USD",
-          country: "United States",
-          type: "Common Stock",
-        },
-        {
-          symbol: "UNH",
-          name: "UnitedHealth Group Incorporated",
-          exchange: "NYSE",
-          currency: "USD",
-          country: "United States",
-          type: "Common Stock",
-        },
-        {
-          symbol: "HD",
-          name: "The Home Depot Inc.",
-          exchange: "NYSE",
-          currency: "USD",
-          country: "United States",
-          type: "Common Stock",
-        },
-        {
-          symbol: "MA",
-          name: "Mastercard Incorporated",
-          exchange: "NYSE",
-          currency: "USD",
-          country: "United States",
-          type: "Common Stock",
-        },
-        {
-          symbol: "DIS",
-          name: "The Walt Disney Company",
-          exchange: "NYSE",
-          currency: "USD",
-          country: "United States",
-          type: "Common Stock",
-        },
-        {
-          symbol: "ADBE",
-          name: "Adobe Inc.",
-          exchange: "NASDAQ",
-          currency: "USD",
-          country: "United States",
-          type: "Common Stock",
-        },
-        {
-          symbol: "NFLX",
-          name: "Netflix Inc.",
-          exchange: "NASDAQ",
-          currency: "USD",
-          country: "United States",
-          type: "Common Stock",
-        },
-        {
-          symbol: "CRM",
-          name: "Salesforce Inc.",
-          exchange: "NYSE",
-          currency: "USD",
-          country: "United States",
-          type: "Common Stock",
-        },
-        {
-          symbol: "XOM",
-          name: "Exxon Mobil Corporation",
-          exchange: "NYSE",
-          currency: "USD",
-          country: "United States",
-          type: "Common Stock",
-        },
-        {
-          symbol: "BAC",
-          name: "Bank of America Corporation",
-          exchange: "NYSE",
-          currency: "USD",
-          country: "United States",
-          type: "Common Stock",
-        },
+        { symbol: "AAPL", name: "Apple Inc.", exchange: "NASDAQ", currency: "USD", country: "United States", type: "Common Stock" },
+        { symbol: "MSFT", name: "Microsoft Corporation", exchange: "NASDAQ", currency: "USD", country: "United States", type: "Common Stock" },
+        { symbol: "GOOGL", name: "Alphabet Inc.", exchange: "NASDAQ", currency: "USD", country: "United States", type: "Common Stock" },
+        { symbol: "AMZN", name: "Amazon.com Inc.", exchange: "NASDAQ", currency: "USD", country: "United States", type: "Common Stock" },
+        { symbol: "TSLA", name: "Tesla Inc.", exchange: "NASDAQ", currency: "USD", country: "United States", type: "Common Stock" },
+        { symbol: "META", name: "Meta Platforms Inc.", exchange: "NASDAQ", currency: "USD", country: "United States", type: "Common Stock" },
+        { symbol: "NVDA", name: "NVIDIA Corporation", exchange: "NASDAQ", currency: "USD", country: "United States", type: "Common Stock" },
+        { symbol: "JPM", name: "JPMorgan Chase & Co.", exchange: "NYSE", currency: "USD", country: "United States", type: "Common Stock" },
+        { symbol: "JNJ", name: "Johnson & Johnson", exchange: "NYSE", currency: "USD", country: "United States", type: "Common Stock" },
+        { symbol: "V", name: "Visa Inc.", exchange: "NYSE", currency: "USD", country: "United States", type: "Common Stock" },
+        { symbol: "PG", name: "The Procter & Gamble Company", exchange: "NYSE", currency: "USD", country: "United States", type: "Common Stock" },
+        { symbol: "UNH", name: "UnitedHealth Group Incorporated", exchange: "NYSE", currency: "USD", country: "United States", type: "Common Stock" },
+        { symbol: "HD", name: "The Home Depot Inc.", exchange: "NYSE", currency: "USD", country: "United States", type: "Common Stock" },
+        { symbol: "MA", name: "Mastercard Incorporated", exchange: "NYSE", currency: "USD", country: "United States", type: "Common Stock" },
+        { symbol: "DIS", name: "The Walt Disney Company", exchange: "NYSE", currency: "USD", country: "United States", type: "Common Stock" },
+        { symbol: "ADBE", name: "Adobe Inc.", exchange: "NASDAQ", currency: "USD", country: "United States", type: "Common Stock" },
+        { symbol: "NFLX", name: "Netflix Inc.", exchange: "NASDAQ", currency: "USD", country: "United States", type: "Common Stock" },
+        { symbol: "CRM", name: "Salesforce Inc.", exchange: "NYSE", currency: "USD", country: "United States", type: "Common Stock" },
+        { symbol: "XOM", name: "Exxon Mobil Corporation", exchange: "NYSE", currency: "USD", country: "United States", type: "Common Stock" },
+        { symbol: "BAC", name: "Bank of America Corporation", exchange: "NYSE", currency: "USD", country: "United States", type: "Common Stock" }
       ];
-
+      
       stocks = usStocks;
     }
 
     // Apply search filter if provided
     if (search && search.trim()) {
       const searchTerm = search.toLowerCase().trim();
-      stocks = stocks.filter(
-        (stock) =>
-          stock.symbol.toLowerCase().includes(searchTerm) ||
-          stock.name.toLowerCase().includes(searchTerm)
+      stocks = stocks.filter(stock =>
+        stock.symbol.toLowerCase().includes(searchTerm) ||
+        stock.name.toLowerCase().includes(searchTerm)
       );
     }
 
@@ -3389,16 +2857,73 @@ app.get("/api/stock-companies", async (req, res) => {
     const endIndex = startIndex + parseInt(limit);
     const paginatedStocks = stocks.slice(startIndex, endIndex);
 
-    console.log(
-      `Returning ${paginatedStocks.length} stocks out of ${stocks.length} total`
-    );
+    console.log(`Returning ${paginatedStocks.length} stocks out of ${stocks.length} total`);
 
     res.json({
       companies: paginatedStocks,
       total: stocks.length,
       page: parseInt(page),
       limit: parseInt(limit),
-      totalPages: Math.ceil(stocks.length / parseInt(limit)),
+      totalPages: Math.ceil(stocks.length / parseInt(limit))
+    });
+
+  } catch (error) {
+    console.error("Error fetching stock companies:", error);
+    res.status(500).json({
+      error: "Failed to fetch stock companies",
+      message: error.message
+    });
+  }
+});
+    if (search && search.trim()) {
+      const searchTerm = search.trim().toLowerCase();
+      filteredCompanies = filteredCompanies.filter(
+        (company) =>
+          company.symbol.toLowerCase().includes(searchTerm) ||
+          company.description.toLowerCase().includes(searchTerm)
+      );
+    }
+
+    // Sort by symbol for consistency
+    filteredCompanies.sort((a, b) => a.symbol.localeCompare(b.symbol));
+
+    // Limit to reasonable number and format response
+    const limitedCompanies = filteredCompanies
+      .slice(0, 2000)
+      .map((company) => ({
+        symbol: company.symbol,
+        name: company.description,
+        displayName: company.displaySymbol || company.symbol,
+        type: company.type || "Common Stock",
+        exchange: company.exchange,
+        country: company.country,
+        currency: company.currency || getCurrencyFromExchange(company.exchange),
+        mic: company.mic, // Market Identifier Code
+      }));
+
+    // Group by exchange for better organization
+    const groupedByExchange = limitedCompanies.reduce((acc, company) => {
+      const exchangeName = getExchangeName(company.exchange);
+      if (!acc[exchangeName]) {
+        acc[exchangeName] = [];
+      }
+      acc[exchangeName].push(company);
+      return acc;
+    }, {});
+
+    res.json({
+      companies: limitedCompanies,
+      groupedByExchange,
+      total: limitedCompanies.length,
+      totalAvailable: filteredCompanies.length,
+      exchanges: exchangesToFetch,
+      search: search || "",
+      requestedExchange: exchange,
+      requestedCountry: country,
+      message:
+        limitedCompanies.length === 0
+          ? `No companies found for exchange ${exchange}. This may be due to API key limitations or exchange availability.`
+          : null,
     });
   } catch (error) {
     console.error("Error fetching stock companies:", error);
