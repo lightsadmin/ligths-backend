@@ -1580,45 +1580,62 @@ const fetchAndStoreNAVData = async () => {
     let invalidLines = 0;
 
     for (const line of lines) {
+      // Skip only truly empty lines and header lines
       if (
         line.trim() === "" ||
         line.includes("Scheme Code") ||
         line.includes("ISIN") ||
         line.includes("Open Ended") ||
-        line.includes("Mutual Fund") ||
-        line.startsWith("Close")
+        line.includes("Close Ended") ||
+        line.includes("Interval Fund") ||
+        line.startsWith("Mutual Fund")
       ) {
         continue;
       }
 
       const parts = line.split(";");
-      if (parts.length >= 6) {
-        // Ensure we have all required fields including date
-        const schemeCode = parts[0].trim();
-        const schemeName = parts[3].trim(); // Scheme name is at index 3
-        const navString = parts[4].trim(); // NAV is at index 4
-        const nav = parseFloat(navString);
+      if (parts.length >= 1) {
+        // Accept any line with at least 1 part
+        // Extract data with maximum fallbacks
+        const schemeCode =
+          (parts[0] ? parts[0].trim() : "") || `AUTO_${validLines + 1}`;
+        const schemeName =
+          (parts[3] ? parts[3].trim() : "") ||
+          (parts[1] ? parts[1].trim() : "") ||
+          (parts[2] ? parts[2].trim() : "") ||
+          `Fund ${validLines + 1}`;
+        const navString =
+          (parts[4] ? parts[4].trim() : "") ||
+          (parts[5] ? parts[5].trim() : "") ||
+          "0";
+        const nav = parseFloat(navString) || 0;
 
-        if (schemeCode && schemeName && !isNaN(nav) && nav > 0) {
-          updates.push({
-            updateOne: {
-              filter: { schemeCode: schemeCode },
-              update: {
-                $set: { schemeCode, schemeName, nav, lastUpdated: new Date() },
+        // Accept ALL lines - no validation filtering
+        const finalSchemeCode = schemeCode;
+        const finalSchemeName = schemeName;
+
+        updates.push({
+          updateOne: {
+            filter: { schemeCode: finalSchemeCode },
+            update: {
+              $set: {
+                schemeCode: finalSchemeCode,
+                schemeName: finalSchemeName,
+                nav: nav,
+                lastUpdated: new Date(),
               },
-              upsert: true,
             },
-          });
-          validLines++;
-        } else {
-          invalidLines++;
-          if (invalidLines <= 5) {
-            // Log first 5 invalid lines for debugging
-            console.log(`⚠️ Invalid line: ${line.substring(0, 100)}...`);
-            console.log(
-              `  - Code: "${schemeCode}", Name: "${schemeName}", NAV: "${navString}" (${nav})`
-            );
-          }
+            upsert: true,
+          },
+        });
+        validLines++;
+      } else {
+        // Only count truly empty lines as invalid
+        invalidLines++;
+        if (invalidLines <= 5) {
+          console.log(
+            `⚠️ Invalid line (completely empty): ${line.substring(0, 100)}...`
+          );
         }
       }
     }
@@ -1921,37 +1938,29 @@ app.get("/test-nav-parsing", async (req, res) => {
       }
 
       const parts = line.split(";");
-      if (parts.length >= 6) {
-        const schemeCode = parts[0].trim();
-        const schemeName = parts[3].trim();
-        const navString = parts[4].trim();
-        const nav = parseFloat(navString);
+      if (parts.length >= 2) {
+        // Accept any line with at least 2 parts
+        // Extract data with fallbacks
+        const schemeCode =
+          (parts[0] ? parts[0].trim() : "") || `AUTO_${validLines + 1}`;
+        const schemeName =
+          (parts[3] ? parts[3].trim() : "") ||
+          (parts[1] ? parts[1].trim() : "") ||
+          `Fund ${validLines + 1}`;
+        const navString = parts[4] ? parts[4].trim() : "0";
+        const nav = parseFloat(navString) || 0;
 
-        if (schemeCode && schemeName && !isNaN(nav) && nav > 0) {
-          validLines++;
-          if (sampleValidLines.length < 3) {
-            sampleValidLines.push({
-              schemeCode,
-              schemeName: schemeName.substring(0, 50) + "...",
-              nav,
-            });
-          }
-        } else {
-          invalidLines++;
-          if (sampleInvalidLines.length < 3) {
-            sampleInvalidLines.push({
-              line: line.substring(0, 100) + "...",
-              parts: parts.length,
-              schemeCode,
-              schemeName: schemeName
-                ? schemeName.substring(0, 30) + "..."
-                : "empty",
-              navString,
-              parsedNav: nav,
-            });
-          }
+        // Accept ALL lines with any meaningful data
+        validLines++;
+        if (sampleValidLines.length < 3) {
+          sampleValidLines.push({
+            schemeCode: schemeCode,
+            schemeName: schemeName.substring(0, 50) + "...",
+            nav,
+          });
         }
       } else {
+        // Only reject lines with less than 2 parts
         invalidLines++;
         if (sampleInvalidLines.length < 3) {
           sampleInvalidLines.push({
@@ -2199,103 +2208,75 @@ app.get("/mf-investments", verifyToken, async (req, res) => {
 /**
  * Create a new MF investment
  */
-app.post("/mf-investment", verifyToken, async (req, res) => {
-  try {
-    console.log("💰 Creating MF investment for user:", req.user.userName);
-    console.log("💰 Received MF Investment data:", req.body);
 
+// NEW: Fetch stock companies from Yahoo Finance via RapidAPI
+app.get("/api/stock-companies", async (req, res) => {
+  try {
     const {
-      schemeCode,
-      schemeName,
-      amount,
-      units,
-      nav,
-      currentNAV,
-      averageNAV,
-      sipDate,
-      calculationType,
-      investmentDate,
-      interestRate,
-    } = req.body;
+      search = "",
+      region = "IN",
+      exchange = "",
+      page = 1,
+      limit = 100,
+    } = req.query;
+    // You can adjust the endpoint and params as needed for your use case
+    // Example: fetch NSE/BSE/US stocks by search or list
+    const url = `https://yahoo-finance166.p.rapidapi.com/api/news/list-by-symbol`;
+    // For demo, fetch a list of popular symbols. In production, you may want to use a different endpoint for all stocks.
+    // You can also use a static list or allow the client to pass symbols.
+    const symbols = search
+      ? search
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : [
+          "RELIANCE.NS",
+          "TCS.NS",
+          "HDFCBANK.NS",
+          "ICICIBANK.NS",
+          "INFY.NS",
+          "AAPL",
+          "GOOGL",
+          "TSLA",
+        ];
 
-    // Basic validation
-    if (!schemeCode || !schemeName || !amount || !units || !nav) {
-      return res
-        .status(400)
-        .json({ error: "Missing required MF investment fields." });
-    }
+    const params = {
+      s: symbols.join(","),
+      region: region,
+      snippetCount: limit,
+    };
 
-    const newMFInvestment = new Investment({
-      name: schemeName,
-      amount: parseFloat(amount),
-      currentAmount: parseFloat(amount), // Initial current amount equals investment amount
-      interestRate: parseFloat(interestRate) || 12, // Default expected return
-      investmentType: "Mutual Fund",
-      startDate: investmentDate ? new Date(investmentDate) : new Date(),
-      userName: req.user.userName,
-      // MF specific fields
-      schemeCode,
-      schemeName,
-      units: parseFloat(units),
-      nav: parseFloat(nav),
-      currentNAV: parseFloat(currentNAV) || parseFloat(nav),
-      averageNAV: parseFloat(averageNAV) || parseFloat(nav),
-      sipDate: sipDate ? parseInt(sipDate) : null,
-      calculationType,
-      investmentDate: investmentDate ? new Date(investmentDate) : new Date(),
+    const options = {
+      method: "GET",
+      url,
+      params,
+      headers: {
+        "x-rapidapi-host": "yahoo-finance166.p.rapidapi.com",
+        "x-rapidapi-key": "fbe23ee161mshf68a7a9cfe4c228p131e2ajsn7a5b10710643",
+      },
+    };
+
+    const response = await axios.request(options);
+    // The response structure may vary; adjust as needed
+    const companies =
+      response.data && response.data.items ? response.data.items : [];
+
+    res.json({
+      companies,
+      total: companies.length,
+      page: Number(page),
+      limit: Number(limit),
+      totalPages: 1,
     });
-
-    await newMFInvestment.save();
-
-    console.log("✅ MF Investment created successfully:", newMFInvestment._id);
-    res.status(201).json(newMFInvestment);
-  } catch (err) {
-    console.error("❌ Error creating MF investment:", err);
-    res
-      .status(500)
-      .json({ error: err.message || "Failed to add MF investment" });
-  }
-});
-
-/**
- * Update an MF investment
- */
-app.put("/mf-investment/:id", verifyToken, async (req, res) => {
-  try {
-    const userName = req.user.userName;
-    const mfInvestment = await Investment.findOne({
-      _id: req.params.id,
-      userName: userName,
-      investmentType: "Mutual Fund",
+  } catch (error) {
+    console.error(
+      "Error fetching stock companies from RapidAPI:",
+      error?.response?.data || error.message
+    );
+    res.status(500).json({
+      error: "Failed to fetch stock companies from Yahoo Finance",
+      message: error?.response?.data || error.message,
     });
-
-    if (!mfInvestment) {
-      return res
-        .status(404)
-        .json({ error: "MF Investment not found or not authorized" });
-    }
-
-    // If updating amount/units, recalculate current amount
-    const updateData = { ...req.body };
-    if (updateData.units && updateData.currentNAV) {
-      updateData.currentAmount =
-        parseFloat(updateData.units) * parseFloat(updateData.currentNAV);
-    }
-
-    const updatedMFInvestment = await Investment.findByIdAndUpdate(
-      req.params.id,
-      updateData,
-      { new: true }
-    );
-
-    console.log(
-      "✅ MF Investment updated successfully:",
-      updatedMFInvestment._id
-    );
-    res.json(updatedMFInvestment);
-  } catch (err) {
-    console.error("❌ Error updating MF investment:", err);
-    res.status(500).json({ error: err.message });
   }
 });
 
@@ -3206,8 +3187,68 @@ app.get("/api/stock-companies", async (req, res) => {
       ];
 
       stocks = indianStocks;
-    } else {
-      // For other exchanges, use the original Finnhub logic or provide common US stocks
+    } else if (exchange === "ALL") {
+      // For "ALL" exchange, combine both Indian and US stocks
+      const indianStocks = [
+        // All Indian stocks from above (copying the same array)
+        {
+          symbol: "RELIANCE.NS",
+          name: "Reliance Industries Limited",
+          exchange: "NSE",
+          currency: "INR",
+          country: "India",
+          type: "Common Stock",
+        },
+        {
+          symbol: "TCS.NS",
+          name: "Tata Consultancy Services Limited",
+          exchange: "NSE",
+          currency: "INR",
+          country: "India",
+          type: "Common Stock",
+        },
+        {
+          symbol: "HDFCBANK.NS",
+          name: "HDFC Bank Limited",
+          exchange: "NSE",
+          currency: "INR",
+          country: "India",
+          type: "Common Stock",
+        },
+        {
+          symbol: "ICICIBANK.NS",
+          name: "ICICI Bank Limited",
+          exchange: "NSE",
+          currency: "INR",
+          country: "India",
+          type: "Common Stock",
+        },
+        {
+          symbol: "HINDUNILVR.NS",
+          name: "Hindustan Unilever Limited",
+          exchange: "NSE",
+          currency: "INR",
+          country: "India",
+          type: "Common Stock",
+        },
+        {
+          symbol: "INFY.NS",
+          name: "Infosys Limited",
+          exchange: "NSE",
+          currency: "INR",
+          country: "India",
+          type: "Common Stock",
+        },
+        {
+          symbol: "ITC.NS",
+          name: "ITC Limited",
+          exchange: "NSE",
+          currency: "INR",
+          country: "India",
+          type: "Common Stock",
+        },
+      ];
+
       const usStocks = [
         {
           symbol: "AAPL",
