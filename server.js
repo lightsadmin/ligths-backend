@@ -1579,64 +1579,80 @@ const fetchAndStoreNAVData = async () => {
     let validLines = 0;
     let invalidLines = 0;
     let lineNumber = 0;
+    const seenSchemeCodes = new Set(); // Track unique scheme codes
 
     for (const line of lines) {
       lineNumber++;
 
-      // Only skip completely empty lines (no content at all)
+      // Skip truly empty lines
       if (line.trim() === "") {
         invalidLines++;
         continue;
       }
 
-      // Process EVERY line that has any content, including headers
-      const parts = line.split(";");
-
-      // Extract data with maximum fallbacks - be extremely liberal
-      let schemeCode = "";
-      let schemeName = "";
-      let navString = "0";
-
-      // Try to extract meaningful data from any position
-      for (let i = 0; i < parts.length; i++) {
-        const part = parts[i] ? parts[i].trim() : "";
-        if (part) {
-          if (!schemeCode) schemeCode = part;
-          if (!schemeName && part !== schemeCode) schemeName = part;
-          if (!navString || navString === "0") {
-            const numMatch = part.match(/[\d,.]+/);
-            if (numMatch) navString = numMatch[0];
-          }
-        }
+      // Skip obvious header lines
+      if (
+        line.includes("Scheme Code;ISIN Div Payout") ||
+        line.includes("ISIN Div Reinvestment") ||
+        line.includes("Scheme Name;Net Asset Value") ||
+        line.includes("Date;") ||
+        line.startsWith("Open Ended") ||
+        line.startsWith("Close Ended") ||
+        line.startsWith("Interval Fund") ||
+        (line.startsWith("Mutual Fund") && line.length < 100)
+      ) {
+        invalidLines++;
+        continue;
       }
 
-      // Ensure unique scheme codes by including line number
-      const uniqueSchemeCode = schemeCode
-        ? `${schemeCode}_L${lineNumber}`
-        : `LINE_${lineNumber}`;
-      const finalSchemeName =
-        schemeName || line.substring(0, 100) || `Fund Line ${lineNumber}`;
+      const parts = line.split(";");
 
-      const nav = parseFloat(navString.replace(/,/g, "")) || 0;
+      // Only process lines with proper mutual fund structure (at least 4 parts)
+      if (parts.length >= 4) {
+        const schemeCode = parts[0] ? parts[0].trim() : "";
+        const isinDivPayout = parts[1] ? parts[1].trim() : "";
+        const isinDivReinvest = parts[2] ? parts[2].trim() : "";
+        const schemeName = parts[3] ? parts[3].trim() : "";
+        const navString = parts[4] ? parts[4].trim() : "0";
 
-      // Accept EVERY line with any content - use unique scheme codes
-      updates.push({
-        updateOne: {
-          filter: { schemeCode: uniqueSchemeCode },
-          update: {
-            $set: {
-              schemeCode: uniqueSchemeCode,
-              schemeName: finalSchemeName,
-              nav: nav,
-              lastUpdated: new Date(),
-              lineNumber: lineNumber,
-              originalLine: line.substring(0, 200), // Store original for debugging
+        // Validate that this looks like a real mutual fund entry
+        if (
+          schemeCode &&
+          schemeCode.length > 0 &&
+          schemeName &&
+          schemeName.length > 5 &&
+          !schemeName.includes("Scheme Code") &&
+          !schemeName.includes("ISIN") &&
+          !seenSchemeCodes.has(schemeCode) // Avoid duplicates
+        ) {
+          const nav = parseFloat(navString.replace(/,/g, "")) || 0;
+
+          // Store the original scheme code (no line number suffix)
+          seenSchemeCodes.add(schemeCode);
+
+          updates.push({
+            updateOne: {
+              filter: { schemeCode: schemeCode },
+              update: {
+                $set: {
+                  schemeCode: schemeCode,
+                  schemeName: schemeName,
+                  nav: nav,
+                  lastUpdated: new Date(),
+                  isinDivPayout: isinDivPayout,
+                  isinDivReinvest: isinDivReinvest,
+                },
+              },
+              upsert: true,
             },
-          },
-          upsert: true,
-        },
-      });
-      validLines++;
+          });
+          validLines++;
+        } else {
+          invalidLines++;
+        }
+      } else {
+        invalidLines++;
+      }
     }
 
     console.log(`📊 Processing statistics:
@@ -1895,6 +1911,61 @@ app.post("/update-nav", async (req, res) => {
     });
   } catch (error) {
     console.error("❌ Manual NAV update failed:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Cleanup endpoint to remove duplicate scheme codes from database
+ */
+app.post("/cleanup-duplicates", async (req, res) => {
+  try {
+    console.log("🧹 Starting duplicate cleanup...");
+
+    // Get all funds grouped by scheme code
+    const duplicates = await MutualFund.aggregate([
+      {
+        $group: {
+          _id: "$schemeCode",
+          count: { $sum: 1 },
+          docs: { $push: "$$ROOT" },
+        },
+      },
+      {
+        $match: {
+          count: { $gt: 1 },
+        },
+      },
+    ]);
+
+    console.log(`🔍 Found ${duplicates.length} duplicate scheme codes`);
+
+    let deletedCount = 0;
+    for (const duplicate of duplicates) {
+      // Keep the most recent document, delete the rest
+      const docs = duplicate.docs.sort(
+        (a, b) => new Date(b.lastUpdated || 0) - new Date(a.lastUpdated || 0)
+      );
+      const docsToDelete = docs.slice(1); // Keep first (most recent), delete rest
+
+      for (const doc of docsToDelete) {
+        await MutualFund.deleteOne({ _id: doc._id });
+        deletedCount++;
+      }
+    }
+
+    const totalCount = await MutualFund.countDocuments();
+    console.log(
+      `✅ Cleanup complete: deleted ${deletedCount} duplicates, ${totalCount} funds remaining`
+    );
+
+    res.json({
+      message: "Duplicate cleanup completed",
+      duplicatesRemoved: deletedCount,
+      totalFunds: totalCount,
+    });
+  } catch (error) {
+    console.error("❌ Cleanup failed:", error);
     res.status(500).json({ error: error.message });
   }
 });
