@@ -1606,7 +1606,7 @@ const fetchAndStoreNAVData = async () => {
       }
 
       const parts = line.split(";");
-
+      
       // Only process lines with proper mutual fund structure (at least 4 parts)
       if (parts.length >= 4) {
         const schemeCode = parts[0] ? parts[0].trim() : "";
@@ -1614,19 +1614,19 @@ const fetchAndStoreNAVData = async () => {
         const isinDivReinvest = parts[2] ? parts[2].trim() : "";
         const schemeName = parts[3] ? parts[3].trim() : "";
         const navString = parts[4] ? parts[4].trim() : "0";
-
+        
         // Validate that this looks like a real mutual fund entry
         if (
-          schemeCode &&
-          schemeCode.length > 0 &&
-          schemeName &&
-          schemeName.length > 5 &&
+          schemeCode && 
+          schemeCode.length > 0 && 
+          schemeName && 
+          schemeName.length > 5 && 
           !schemeName.includes("Scheme Code") &&
           !schemeName.includes("ISIN") &&
           !seenSchemeCodes.has(schemeCode) // Avoid duplicates
         ) {
-          const nav = parseFloat(navString.replace(/,/g, "")) || 0;
-
+          const nav = parseFloat(navString.replace(/,/g, '')) || 0;
+          
           // Store the original scheme code (no line number suffix)
           seenSchemeCodes.add(schemeCode);
 
@@ -1911,61 +1911,6 @@ app.post("/update-nav", async (req, res) => {
     });
   } catch (error) {
     console.error("❌ Manual NAV update failed:", error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-/**
- * Cleanup endpoint to remove duplicate scheme codes from database
- */
-app.post("/cleanup-duplicates", async (req, res) => {
-  try {
-    console.log("🧹 Starting duplicate cleanup...");
-
-    // Get all funds grouped by scheme code
-    const duplicates = await MutualFund.aggregate([
-      {
-        $group: {
-          _id: "$schemeCode",
-          count: { $sum: 1 },
-          docs: { $push: "$$ROOT" },
-        },
-      },
-      {
-        $match: {
-          count: { $gt: 1 },
-        },
-      },
-    ]);
-
-    console.log(`🔍 Found ${duplicates.length} duplicate scheme codes`);
-
-    let deletedCount = 0;
-    for (const duplicate of duplicates) {
-      // Keep the most recent document, delete the rest
-      const docs = duplicate.docs.sort(
-        (a, b) => new Date(b.lastUpdated || 0) - new Date(a.lastUpdated || 0)
-      );
-      const docsToDelete = docs.slice(1); // Keep first (most recent), delete rest
-
-      for (const doc of docsToDelete) {
-        await MutualFund.deleteOne({ _id: doc._id });
-        deletedCount++;
-      }
-    }
-
-    const totalCount = await MutualFund.countDocuments();
-    console.log(
-      `✅ Cleanup complete: deleted ${deletedCount} duplicates, ${totalCount} funds remaining`
-    );
-
-    res.json({
-      message: "Duplicate cleanup completed",
-      duplicatesRemoved: deletedCount,
-      totalFunds: totalCount,
-    });
-  } catch (error) {
-    console.error("❌ Cleanup failed:", error);
     res.status(500).json({ error: error.message });
   }
 });
