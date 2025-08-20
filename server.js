@@ -1578,66 +1578,65 @@ const fetchAndStoreNAVData = async () => {
     const updates = [];
     let validLines = 0;
     let invalidLines = 0;
+    let lineNumber = 0;
 
     for (const line of lines) {
-      // Skip only truly empty lines and header lines
-      if (
-        line.trim() === "" ||
-        line.includes("Scheme Code") ||
-        line.includes("ISIN") ||
-        line.includes("Open Ended") ||
-        line.includes("Close Ended") ||
-        line.includes("Interval Fund") ||
-        line.startsWith("Mutual Fund")
-      ) {
+      lineNumber++;
+
+      // Only skip completely empty lines (no content at all)
+      if (line.trim() === "") {
+        invalidLines++;
         continue;
       }
 
+      // Process EVERY line that has any content, including headers
       const parts = line.split(";");
-      if (parts.length >= 1) {
-        // Accept any line with at least 1 part
-        // Extract data with maximum fallbacks
-        const schemeCode =
-          (parts[0] ? parts[0].trim() : "") || `AUTO_${validLines + 1}`;
-        const schemeName =
-          (parts[3] ? parts[3].trim() : "") ||
-          (parts[1] ? parts[1].trim() : "") ||
-          (parts[2] ? parts[2].trim() : "") ||
-          `Fund ${validLines + 1}`;
-        const navString =
-          (parts[4] ? parts[4].trim() : "") ||
-          (parts[5] ? parts[5].trim() : "") ||
-          "0";
-        const nav = parseFloat(navString) || 0;
 
-        // Accept ALL lines - no validation filtering
-        const finalSchemeCode = schemeCode;
-        const finalSchemeName = schemeName;
+      // Extract data with maximum fallbacks - be extremely liberal
+      let schemeCode = "";
+      let schemeName = "";
+      let navString = "0";
 
-        updates.push({
-          updateOne: {
-            filter: { schemeCode: finalSchemeCode },
-            update: {
-              $set: {
-                schemeCode: finalSchemeCode,
-                schemeName: finalSchemeName,
-                nav: nav,
-                lastUpdated: new Date(),
-              },
-            },
-            upsert: true,
-          },
-        });
-        validLines++;
-      } else {
-        // Only count truly empty lines as invalid
-        invalidLines++;
-        if (invalidLines <= 5) {
-          console.log(
-            `⚠️ Invalid line (completely empty): ${line.substring(0, 100)}...`
-          );
+      // Try to extract meaningful data from any position
+      for (let i = 0; i < parts.length; i++) {
+        const part = parts[i] ? parts[i].trim() : "";
+        if (part) {
+          if (!schemeCode) schemeCode = part;
+          if (!schemeName && part !== schemeCode) schemeName = part;
+          if (!navString || navString === "0") {
+            const numMatch = part.match(/[\d,.]+/);
+            if (numMatch) navString = numMatch[0];
+          }
         }
       }
+
+      // Ensure unique scheme codes by including line number
+      const uniqueSchemeCode = schemeCode
+        ? `${schemeCode}_L${lineNumber}`
+        : `LINE_${lineNumber}`;
+      const finalSchemeName =
+        schemeName || line.substring(0, 100) || `Fund Line ${lineNumber}`;
+
+      const nav = parseFloat(navString.replace(/,/g, "")) || 0;
+
+      // Accept EVERY line with any content - use unique scheme codes
+      updates.push({
+        updateOne: {
+          filter: { schemeCode: uniqueSchemeCode },
+          update: {
+            $set: {
+              schemeCode: uniqueSchemeCode,
+              schemeName: finalSchemeName,
+              nav: nav,
+              lastUpdated: new Date(),
+              lineNumber: lineNumber,
+              originalLine: line.substring(0, 200), // Store original for debugging
+            },
+          },
+          upsert: true,
+        },
+      });
+      validLines++;
     }
 
     console.log(`📊 Processing statistics:
