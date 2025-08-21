@@ -615,6 +615,71 @@ app.post("/api/forgot-password", async (req, res) => {
   }
 });
 
+// 🔍 **Check Security PIN Status Route**
+app.post("/api/check-security-pin", async (req, res) => {
+  console.log("🔍 Check security PIN route hit!");
+  const { email } = req.body;
+
+  try {
+    // Input validation
+    if (!email) {
+      return res.status(400).json({
+        error: "Email is required.",
+      });
+    }
+
+    // Find user by email across all collections
+    let foundUser = null;
+
+    const collections = await mongoose.connection.db
+      .listCollections()
+      .toArray();
+
+    for (const collection of collections) {
+      const collectionName = collection.name;
+
+      // Skip system collections
+      if (collectionName.startsWith("system.")) continue;
+
+      try {
+        const UserModel = createUserModel(collectionName);
+        const user = await UserModel.findOne({ email: email });
+
+        if (user) {
+          foundUser = user;
+          console.log(
+            `🔍 Found user: ${user.userName}, Email: ${
+              user.email
+            }, Has SecurityPin: ${!!user.securityPin}`
+          );
+          break; // Email is unique, so we can break after finding the user
+        }
+      } catch (err) {
+        // Skip collections that might not be user collections
+        continue;
+      }
+    }
+
+    if (!foundUser) {
+      console.log(`❌ No user found with email: ${email}`);
+      return res
+        .status(404)
+        .json({ error: "No account found with this email address." });
+    }
+
+    // Return security PIN status
+    res.status(200).json({
+      hasSecurityPin: !!foundUser.securityPin,
+      message: foundUser.securityPin
+        ? "User has a security PIN set"
+        : "User does not have a security PIN",
+    });
+  } catch (error) {
+    console.error("❌ Error checking security PIN:", error);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
 // �📧 **Google Authentication Route**
 app.post("/api/google-auth", async (req, res) => {
   console.log("🔐 Google auth route hit!");
