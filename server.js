@@ -542,9 +542,7 @@ app.post("/api/forgot-password", async (req, res) => {
           console.log(
             `🔍 Found user: ${user.userName}, Email: ${
               user.email
-            }, Has SecurityPin: ${!!user.securityPin}, SecurityPin Value: "${
-              user.securityPin
-            }", SecurityPin Type: ${typeof user.securityPin}`
+            }, Has SecurityPin: ${!!user.securityPin}`
           );
           break; // Email is unique, so we can break after finding the user
         }
