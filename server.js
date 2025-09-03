@@ -2124,7 +2124,7 @@ app.get("/test-nav-parsing", async (req, res) => {
 
       const parts = line.split(";");
       if (parts.length >= 2) {
-        // Accept any line with at least 2 parts
+        // Further reduced - accept any line with at least 2 parts
         // Extract data with fallbacks
         const schemeCode =
           (parts[0] ? parts[0].trim() : "") || `AUTO_${validLines + 1}`;
@@ -4129,46 +4129,23 @@ async function fetchQuoteStock(symbolObj) {
     const quote = await yahooFinance.quote(symbolObj.symbol);
 
     return {
-      symbol: symbolObj.symbol,
+      symbol: quote.symbol,
       name: quote.shortName || formatCompanyNameStock(symbolObj.baseSymbol),
       exchange: symbolObj.exchange,
       currency: quote.currency || "INR",
       country: "India",
       type: "Common Stock",
       sector: quote.sector || getSectorFromSymbolStock(symbolObj.baseSymbol),
-      price: quote.regularMarketPrice || 0,
-      change: quote.regularMarketChange || 0,
-      changePercent: quote.regularMarketChangePercent || 0,
+      currentPrice: quote.regularMarketPrice || 0,
+      dayChange: quote.regularMarketChange || 0,
+      dayChangePercent: quote.regularMarketChangePercent || 0,
       volume: quote.regularMarketVolume || 0,
-      high: quote.regularMarketDayHigh || 0,
-      low: quote.regularMarketDayLow || 0,
-      open: quote.regularMarketOpen || 0,
-      previousClose: quote.regularMarketPreviousClose || 0,
       marketCap: quote.marketCap || "N/A",
       lastUpdated: new Date(),
     };
   } catch (err) {
     console.error(`❌ Failed to fetch ${symbolObj.symbol}:`, err.message);
-    // Return fallback data with realistic sample values
-    return {
-      symbol: symbolObj.symbol,
-      name: formatCompanyNameStock(symbolObj.baseSymbol),
-      exchange: symbolObj.exchange,
-      currency: "INR",
-      country: "India",
-      type: "Common Stock",
-      sector: getSectorFromSymbolStock(symbolObj.baseSymbol),
-      price: Math.floor(Math.random() * 3000) + 100,
-      change: (Math.random() - 0.5) * 100,
-      changePercent: (Math.random() - 0.5) * 10,
-      volume: Math.floor(Math.random() * 1000000) + 10000,
-      high: 0,
-      low: 0,
-      open: 0,
-      previousClose: 0,
-      marketCap: "N/A",
-      lastUpdated: new Date(),
-    };
+    return null; // Return null on error so it's not added to the list
   }
 }
 
@@ -4198,9 +4175,9 @@ const updateAllStocksDaily = async () => {
                 symbol: quote.symbol,
                 name: quote.name,
                 exchange: quote.exchange,
-                currentPrice: quote.price,
-                dayChange: quote.change,
-                dayChangePercent: quote.changePercent,
+                currentPrice: quote.currentPrice,
+                dayChange: quote.dayChange,
+                dayChangePercent: quote.dayChangePercent,
                 marketCap: quote.marketCap,
                 lastUpdated: quote.lastUpdated,
               },
@@ -4231,67 +4208,14 @@ const updateAllStocksDaily = async () => {
 cron.schedule("0 15 * * *", updateAllStocksDaily, {
   timezone: "Asia/Kolkata",
 });
-
-// Initial fetch on server start
-// updateAllStocksDaily(); // You can uncomment this to run on server start
+updateAllStocksDaily();
 
 // 🔹 **ENHANCED STOCK ENDPOINTS WITH YAHOO FINANCE INTEGRATION**
-
-// API: Get paginated stocks with real data (like Python /api/navs endpoint)
-app.get("/api/stocks", async (req, res) => {
-  try {
-    const { page = 1, limit = 50, exchange } = req.query;
-    const pageNum = parseInt(page);
-    const pageLimit = parseInt(limit);
-
-    console.log(`📊 Fetching stock data (page ${pageNum}, limit ${pageLimit})`);
-
-    // Filter by exchange
-    let symbolsToFetch = allStockSymbols;
-    if (exchange && exchange !== "ALL") {
-      symbolsToFetch = allStockSymbols.filter((s) => s.exchange === exchange);
-    }
-
-    // Pagination
-    const start = (pageNum - 1) * pageLimit;
-    const end = start + pageLimit;
-    const symbolsPage = symbolsToFetch.slice(start, end);
-
-    console.log(`🔄 Fetching real quotes for ${symbolsPage.length} symbols...`);
-
-    // Fetch real data from Yahoo Finance
-    const fetchPromises = symbolsPage.map(async (symbolObj) => {
-      try {
-        return await fetchQuoteStock(symbolObj);
-      } catch (error) {
-        console.error(`❌ Error fetching ${symbolObj.symbol}:`, error.message);
-        return null;
-      }
-    });
-
-    const data = await Promise.all(fetchPromises);
-    const companies = data.filter((d) => d !== null);
-
-    console.log(`✅ Successfully fetched ${companies.length} stock quotes`);
-
-    res.json({
-      companies,
-      currentPage: pageNum,
-      totalPages: Math.ceil(symbolsToFetch.length / pageLimit),
-      totalCompanies: symbolsToFetch.length,
-      hasNext: end < symbolsToFetch.length,
-      lastUpdated: new Date(),
-    });
-  } catch (error) {
-    console.error("❌ Error fetching stock data:", error);
-    res.status(500).json({ error: "Failed to fetch stocks" });
-  }
-});
 
 // NEW: Endpoint to get daily-updated stocks from the database
 app.get("/api/daily-stocks", async (req, res) => {
   try {
-    const { page = 1, limit = 20, search } = req.query;
+    const { page = 1, limit = 5000, search } = req.query;
     const pageNum = parseInt(page);
     const pageLimit = parseInt(limit);
 
@@ -4350,117 +4274,6 @@ app.get("/api/stocks/:symbol", async (req, res) => {
       error
     );
     res.status(500).json({ error: "Failed to fetch stock detail" });
-  }
-});
-
-// API: Enhanced stock companies endpoint with real data (MAIN ENDPOINT)
-app.get("/api/stock-companies-real", async (req, res) => {
-  try {
-    const { page = 1, limit = 50, exchange, search } = req.query;
-    const pageNum = parseInt(page);
-    const pageLimit = parseInt(limit);
-
-    console.log(
-      `📊 Fetching real stock data (page ${pageNum}, limit ${pageLimit})`
-    );
-
-    // Filter by exchange if specified
-    let symbolsToFetch = allStockSymbols;
-    if (exchange && exchange !== "ALL" && exchange !== "NSE") {
-      symbolsToFetch = allStockSymbols.filter((s) => s.exchange === exchange);
-    }
-
-    // Apply search filter if provided
-    if (search && search.trim()) {
-      const searchTerm = search.toLowerCase().trim();
-      symbolsToFetch = symbolsToFetch.filter(
-        (s) =>
-          s.baseSymbol.toLowerCase().includes(searchTerm) ||
-          formatCompanyNameStock(s.baseSymbol)
-            .toLowerCase()
-            .includes(searchTerm)
-      );
-    }
-
-    // Pagination
-    const start = (pageNum - 1) * pageLimit;
-    const end = start + pageLimit;
-    const symbolsPage = symbolsToFetch.slice(start, end);
-
-    console.log(`🔄 Fetching real quotes for ${symbolsPage.length} symbols...`);
-
-    // Fetch real data with fallback
-    const fetchPromises = symbolsPage.map(async (symbolObj) => {
-      try {
-        return await fetchQuoteStock(symbolObj);
-      } catch (error) {
-        console.error(`❌ Error fetching ${symbolObj.symbol}:`, error.message);
-        return null;
-      }
-    });
-
-    const data = await Promise.all(fetchPromises);
-    const companies = data.filter((d) => d !== null);
-
-    console.log(`✅ Successfully fetched ${companies.length} stock quotes`);
-
-    res.json({
-      companies,
-      total: symbolsToFetch.length,
-      page: pageNum,
-      limit: pageLimit,
-      totalPages: Math.ceil(symbolsToFetch.length / pageLimit),
-      hasMoreData: end < symbolsToFetch.length,
-      lastUpdated: new Date(),
-    });
-  } catch (error) {
-    console.error("❌ Error in stock-companies-real endpoint:", error);
-    res.status(500).json({
-      error: "Failed to fetch stock data",
-      message: error.message,
-    });
-  }
-});
-
-// API: Legacy stock companies endpoint (for backward compatibility)
-app.get("/api/stock-companies", async (req, res) => {
-  try {
-    const { page = 1, limit = 50, exchange, search } = req.query;
-
-    console.log(`📊 Fetching stock companies (legacy endpoint)`);
-
-    // Return CSV data with sample values to avoid rate limits
-    const staticStocks = allStockSymbols
-      .slice(0, parseInt(limit))
-      .map((symbolObj) => ({
-        symbol: symbolObj.symbol,
-        name: formatCompanyNameStock(symbolObj.baseSymbol),
-        exchange: symbolObj.exchange,
-        currency: "INR",
-        country: "India",
-        type: "Common Stock",
-        sector: getSectorFromSymbolStock(symbolObj.baseSymbol),
-        price: Math.floor(Math.random() * 3000) + 100,
-        change: (Math.random() - 0.5) * 100,
-        changePercent: (Math.random() - 0.5) * 10,
-        volume: Math.floor(Math.random() * 1000000) + 10000,
-        marketCap: "N/A",
-        lastUpdated: new Date(),
-      }));
-
-    res.json({
-      companies: staticStocks,
-      total: allStockSymbols.length,
-      page: parseInt(page),
-      limit: parseInt(limit),
-      totalPages: Math.ceil(allStockSymbols.length / parseInt(limit)),
-    });
-  } catch (error) {
-    console.error("❌ Error in stock-companies endpoint:", error);
-    res.status(500).json({
-      error: "Failed to fetch stock companies",
-      message: error.message,
-    });
   }
 });
 
