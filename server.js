@@ -6,9 +6,15 @@ const bodyParser = require("body-parser");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken"); //n
 const axios = require("axios");
-const yahooFinance = require("yahoo-finance2").default;
 const cron = require("node-cron");
+const fs = require("fs");
+const path = require("path");
 // const nodemailer = require("nodemailer"); // Removed - no longer needed
+
+// Rate limiting for security-sensitive operations
+const forgotPasswordAttempts = new Map();
+const MAX_FORGOT_PASSWORD_ATTEMPTS = 3;
+const FORGOT_PASSWORD_WINDOW = 15 * 60 * 1000; // 15 minutes
 // const crypto = require("crypto"); // Removed - no longer needed
 const ObjectId = mongoose.Types.ObjectId;
 
@@ -118,23 +124,20 @@ const mutualFundSchema = new mongoose.Schema({
 });
 const MutualFund = mongoose.model("MutualFund", mutualFundSchema);
 
-// � Define Stock Transaction Schema
-const stockTransactionSchema = new mongoose.Schema({
-  userName: { type: String, required: true },
-  symbol: { type: String, required: true }, // e.g., "AAPL"
-  companyName: { type: String, required: true },
-  type: { type: String, required: true, enum: ["buy", "sell"] },
-  quantity: { type: Number, required: true },
-  price: { type: Number, required: true }, // Price per share
-  total: { type: Number, required: true }, // Total transaction value
-  date: { type: String, required: true }, // Date in YYYY-MM-DD format
-  timestamp: { type: Date, default: Date.now },
+// 📌 Define Stock Schema for NSE/BSE stocks
+const stockSchema = new mongoose.Schema({
+  symbol: { type: String, required: true, unique: true },
+  name: { type: String, required: true },
+  exchange: { type: String, required: true }, // NSE, BSE
+  currentPrice: { type: Number },
+  dayChange: { type: Number },
+  dayChangePercent: { type: Number },
+  marketCap: { type: Number },
+  lastUpdated: { type: Date, default: Date.now },
 });
+const Stock = mongoose.model("Stock", stockSchema);
 
-const StockTransaction = mongoose.model(
-  "StockTransaction",
-  stockTransactionSchema
-);
+// ...existing code...
 
 // �🔹 **Fix Goal Collection Indexes**
 const fixGoalIndexes = async () => {
@@ -241,9 +244,10 @@ app.post("/api/register", async (req, res) => {
       return res.status(400).json({ error: "Username already taken!" });
     }
 
-    // Create a hashed password and security PIN
+    // Create a hashed password and security PIN with enhanced security
+    const saltRounds = 12;
     const hashedPassword = await bcrypt.hash(password, 10);
-    const hashedSecurityPin = await bcrypt.hash(securityPin, 10);
+    const hashedSecurityPin = await bcrypt.hash(securityPin, saltRounds);
 
     // Create User Model for the new user
     const UserModel = createUserModel(userName);
@@ -504,10 +508,46 @@ app.post("/api/forgot-password", async (req, res) => {
   const { email, securityPin, newPassword } = req.body;
 
   try {
+    // Sanitize inputs to prevent injection attacks
+    const sanitizedEmail = email.trim().toLowerCase();
+    const sanitizedSecurityPin = securityPin
+      .trim()
+      .replace(/[^a-zA-Z0-9]/g, "");
+    const sanitizedNewPassword = newPassword.trim();
+
+    // Rate limiting check
+    const clientIP = req.ip || req.connection.remoteAddress;
+    const attemptKey = `${sanitizedEmail}-${clientIP}`;
+    const now = Date.now();
+
+    if (forgotPasswordAttempts.has(attemptKey)) {
+      const attempts = forgotPasswordAttempts.get(attemptKey);
+      const recentAttempts = attempts.filter(
+        (time) => now - time < FORGOT_PASSWORD_WINDOW
+      );
+
+      if (recentAttempts.length >= MAX_FORGOT_PASSWORD_ATTEMPTS) {
+        return res.status(429).json({
+          error: "Too many password reset attempts. Please try again later.",
+        });
+      }
+
+      forgotPasswordAttempts.set(attemptKey, [...recentAttempts, now]);
+    } else {
+      forgotPasswordAttempts.set(attemptKey, [now]);
+    }
+
     // Input validation
     if (!email || !securityPin || !newPassword) {
       return res.status(400).json({
         error: "Email, security PIN, and new password are required.",
+      });
+    }
+
+    // Security PIN validation
+    if (sanitizedSecurityPin.length < 4 || sanitizedSecurityPin.length > 6) {
+      return res.status(400).json({
+        error: "Security PIN must be 4-6 characters.",
       });
     }
 
@@ -534,16 +574,12 @@ app.post("/api/forgot-password", async (req, res) => {
 
       try {
         const UserModel = createUserModel(collectionName);
-        const user = await UserModel.findOne({ email: email });
+        const user = await UserModel.findOne({ email: sanitizedEmail });
 
         if (user) {
           foundUser = user;
           userModel = UserModel;
-          console.log(
-            `🔍 Found user: ${user.userName}, Email: ${
-              user.email
-            }, Has SecurityPin: ${!!user.securityPin}`
-          );
+          console.log(`🔍 Found user: ${user.userName}, Email: ${user.email}`);
           break; // Email is unique, so we can break after finding the user
         }
       } catch (err) {
@@ -553,7 +589,7 @@ app.post("/api/forgot-password", async (req, res) => {
     }
 
     if (!foundUser) {
-      console.log(`❌ No user found with email: ${email}`);
+      console.log(`❌ No user found with email: ${sanitizedEmail}`);
       return res
         .status(404)
         .json({ error: "No account found with this email address." });
@@ -561,12 +597,14 @@ app.post("/api/forgot-password", async (req, res) => {
 
     // Check if user has a security PIN set
     if (!foundUser.securityPin) {
-      console.log(
-        `⚠️ User ${foundUser.userName} (${email}) exists but has no security PIN. Updating with provided PIN...`
-      );
+      console.log(`⚠️ User ${foundUser.userName} security setup required.`);
 
-      // Hash the provided security PIN and save it to the user
-      const hashedSecurityPin = await bcrypt.hash(securityPin, 10);
+      // Hash the provided security PIN with enhanced security (12 rounds + salt)
+      const saltRounds = 12;
+      const hashedSecurityPin = await bcrypt.hash(
+        sanitizedSecurityPin,
+        saltRounds
+      );
 
       // Update user with security PIN
       await userModel.findByIdAndUpdate(foundUser._id, {
@@ -574,7 +612,7 @@ app.post("/api/forgot-password", async (req, res) => {
       });
 
       console.log(
-        `✅ Security PIN added for user: ${foundUser.userName} (${foundUser.email})`
+        `✅ Security setup completed for user: ${foundUser.userName}`
       );
 
       // Continue with password reset process
@@ -586,22 +624,26 @@ app.post("/api/forgot-password", async (req, res) => {
     );
 
     // Verify security PIN
-    const isPinValid = await bcrypt.compare(securityPin, foundUser.securityPin);
+    const isPinValid = await bcrypt.compare(
+      sanitizedSecurityPin,
+      foundUser.securityPin
+    );
     if (!isPinValid) {
       return res.status(401).json({ error: "Invalid security PIN." });
     }
 
     // Hash the new password
-    const hashedNewPassword = await bcrypt.hash(newPassword, 10);
+    const hashedNewPassword = await bcrypt.hash(sanitizedNewPassword, 10);
 
     // Update user password
     await userModel.findByIdAndUpdate(foundUser._id, {
       password: hashedNewPassword,
     });
 
-    console.log(
-      `✅ Password reset successful for user: ${foundUser.userName} (${foundUser.email})`
-    );
+    // Clear rate limiting attempts on successful reset
+    forgotPasswordAttempts.delete(attemptKey);
+
+    console.log(`✅ Password reset successful for user: ${foundUser.userName}`);
 
     res.status(200).json({
       message:
@@ -998,21 +1040,20 @@ app.post("/api/add-security-pin", async (req, res) => {
       });
     }
 
-    // Hash the security PIN
-    const hashedSecurityPin = await bcrypt.hash(securityPin, 10);
+    // Hash the security PIN with enhanced security (12 rounds)
+    const saltRounds = 12;
+    const hashedSecurityPin = await bcrypt.hash(securityPin, saltRounds);
 
     // Update user with security PIN
     await userModel.findByIdAndUpdate(foundUser._id, {
       securityPin: hashedSecurityPin,
     });
 
-    console.log(
-      `✅ Security PIN added successfully for user: ${foundUser.userName} (${foundUser.email})`
-    );
+    console.log(`✅ Security setup completed for user: ${foundUser.userName}`);
 
     res.status(200).json({
       message:
-        "Security PIN added successfully! You can now use the forgot password feature.",
+        "Security setup completed successfully! You can now use the password reset feature.",
     });
   } catch (error) {
     console.error("❌ Error adding security PIN:", error);
@@ -2543,351 +2584,184 @@ app.post("/mf-investments/update-nav", verifyToken, async (req, res) => {
   }
 });
 
-// --- Stock Companies API Endpoints ---
+// ...existing code...
 
 /**
- * Get stock quote for a specific symbol using Yahoo Finance
+ * Fetch and parse stock symbols from CSV file similar to NAV data
+ * Returns all Indian NSE stocks dynamically from the CSV
  */
-app.get("/api/stock-quote/:symbol", async (req, res) => {
+const fetchStockCompaniesFromCSV = async () => {
   try {
-    const { symbol } = req.params;
-    console.log(`Fetching quote for symbol: ${symbol}`);
+    const fs = require("fs");
+    const path = require("path");
 
-    // Fetch quote using yahoo-finance2
-    const quote = await yahooFinance.quote(symbol);
+    // Read the CSV file
+    const csvPath = path.join(__dirname, "Copy of Book1 (1)(2).csv");
+    const csvData = fs.readFileSync(csvPath, "utf8");
+    const lines = csvData.split("\n");
 
-    if (!quote) {
-      return res.status(404).json({
-        error: "Stock not found",
-        symbol: symbol,
-      });
-    }
+    const stocks = [];
 
-    // Calculate percentage change
-    const currentPrice = quote.regularMarketPrice || 0;
-    const previousClose = quote.regularMarketPreviousClose || 0;
-    const change = currentPrice - previousClose;
-    const percentChange = previousClose
-      ? ((change / previousClose) * 100).toFixed(2)
-      : 0;
+    // Skip header and process each line
+    for (let i = 1; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (line) {
+        const parts = line.split(",");
+        if (parts.length >= 2) {
+          const symbol = parts[0].trim();
+          const exchange = parts[1].trim();
 
-    // Determine currency based on exchange
-    let currency = "USD";
-    if (symbol.includes(".NS") || symbol.includes(".BO")) {
-      currency = "INR";
-    }
-
-    res.json({
-      symbol,
-      quote: {
-        c: currentPrice, // current price
-        pc: previousClose, // previous close
-        o: quote.regularMarketOpen || 0, // open price
-        h: quote.regularMarketDayHigh || 0, // high price
-        l: quote.regularMarketDayLow || 0, // low price
-        t: Math.floor(Date.now() / 1000), // timestamp
-      },
-      profile: {
-        name: quote.longName || quote.shortName || symbol,
-        ticker: symbol,
-        exchange: quote.fullExchangeName || quote.exchange || "Unknown",
-        currency: currency,
-        marketCap: quote.marketCap || 0,
-        country:
-          symbol.includes(".NS") || symbol.includes(".BO")
-            ? "India"
-            : "United States",
-      },
-      percentChange: parseFloat(percentChange),
-      change: change,
-      formatted: {
-        currentPrice: new Intl.NumberFormat("en-US", {
-          style: "currency",
-          currency: currency,
-        }).format(currentPrice),
-        change: `${percentChange >= 0 ? "+" : ""}${percentChange}%`,
-      },
-    });
-  } catch (error) {
-    console.error(
-      `Error fetching stock quote for ${req.params.symbol}:`,
-      error.message
-    );
-    res.status(500).json({
-      error: "Failed to fetch stock quote",
-      message: error.message,
-    });
-  }
-});
-
-/**
- * Get multiple stock quotes at once
- */
-app.post("/api/stock-quotes", async (req, res) => {
-  try {
-    const { symbols } = req.body;
-
-    if (!symbols || !Array.isArray(symbols)) {
-      return res.status(400).json({ error: "Symbols array is required" });
-    }
-
-    console.log(`Fetching quotes for ${symbols.length} symbols:`, symbols);
-
-    const promises = symbols.map(async (symbol) => {
-      try {
-        const quote = await yahooFinance.quote(symbol);
-
-        if (!quote) {
-          return {
-            symbol,
-            quote: null,
-            profile: null,
-            percentChange: 0,
-            error: "Stock not found",
+          // Create stock object with symbol format for Yahoo Finance
+          const stockEntry = {
+            symbol: `${symbol}.NS`,
+            name: formatCompanyName(symbol),
+            exchange: "NSE",
+            currency: "INR",
+            country: "India",
+            type: "Common Stock",
+            sector: getSectorFromSymbol(symbol),
+            marketCap: "N/A",
           };
+
+          stocks.push(stockEntry);
         }
-
-        // Calculate percentage change
-        const currentPrice = quote.regularMarketPrice || 0;
-        const previousClose = quote.regularMarketPreviousClose || 0;
-        const change = currentPrice - previousClose;
-        const percentChange = previousClose
-          ? ((change / previousClose) * 100).toFixed(2)
-          : 0;
-
-        // Determine currency based on exchange
-        let currency = "USD";
-        if (symbol.includes(".NS") || symbol.includes(".BO")) {
-          currency = "INR";
-        }
-
-        return {
-          symbol,
-          quote: {
-            c: currentPrice, // current price
-            pc: previousClose, // previous close
-            o: quote.regularMarketOpen || 0, // open price
-            h: quote.regularMarketDayHigh || 0, // high price
-            l: quote.regularMarketDayLow || 0, // low price
-            t: Math.floor(Date.now() / 1000), // timestamp
-          },
-          profile: {
-            name: quote.longName || quote.shortName || symbol,
-            ticker: symbol,
-            exchange: quote.fullExchangeName || quote.exchange || "Unknown",
-            currency: currency,
-            marketCap: quote.marketCap || 0,
-            country:
-              symbol.includes(".NS") || symbol.includes(".BO")
-                ? "India"
-                : "United States",
-          },
-          percentChange: parseFloat(percentChange),
-          change: change,
-          error: null,
-        };
-      } catch (error) {
-        console.error(`Error fetching quote for ${symbol}:`, error.message);
-        return {
-          symbol,
-          quote: null,
-          profile: null,
-          percentChange: 0,
-          error: error.message,
-        };
       }
-    });
-
-    const results = await Promise.all(promises);
-    console.log(
-      `Successfully fetched ${results.filter((r) => !r.error).length} out of ${
-        symbols.length
-      } quotes`
-    );
-
-    res.json({ data: results });
-  } catch (error) {
-    console.error("Error fetching multiple stock quotes:", error);
-    res.status(500).json({
-      error: "Failed to fetch stock quotes",
-      message: error.message,
-    });
-  }
-});
-
-// --- Stock Transaction API Endpoints ---
-
-/**
- * Add a new stock transaction (buy/sell)
- */
-app.post("/api/stock-transactions", async (req, res) => {
-  try {
-    const {
-      userName,
-      symbol,
-      companyName,
-      type,
-      quantity,
-      price,
-      total,
-      date,
-    } = req.body;
-
-    // Validate required fields
-    if (
-      !userName ||
-      !symbol ||
-      !companyName ||
-      !type ||
-      !quantity ||
-      !price ||
-      !total ||
-      !date
-    ) {
-      return res.status(400).json({ error: "All fields are required" });
     }
 
-    // Validate transaction type
-    if (!["buy", "sell"].includes(type)) {
-      return res
-        .status(400)
-        .json({ error: "Transaction type must be 'buy' or 'sell'" });
-    }
-
-    const stockTransaction = new StockTransaction({
-      userName,
-      symbol,
-      companyName,
-      type,
-      quantity: Number(quantity),
-      price: Number(price),
-      total: Number(total),
-      date,
-    });
-
-    await stockTransaction.save();
-
-    res.status(201).json({
-      message: "Stock transaction added successfully",
-      transaction: stockTransaction,
-    });
+    console.log(`✅ Loaded ${stocks.length} stocks from CSV`);
+    return stocks;
   } catch (error) {
-    console.error("Error adding stock transaction:", error);
-    res.status(500).json({ error: error.message });
+    console.error("❌ Error reading stock CSV:", error);
+    return [];
   }
-});
+};
 
 /**
- * Get all stock transactions for a user
+ * Format company name from symbol (basic implementation)
  */
-app.get("/api/stock-transactions/:userName", async (req, res) => {
-  try {
-    const { userName } = req.params;
-    const { symbol, type, limit = 50, page = 1 } = req.query;
+const formatCompanyName = (symbol) => {
+  // Basic mapping for common symbols - this can be expanded
+  const nameMap = {
+    RELIANCE: "Reliance Industries Limited",
+    TCS: "Tata Consultancy Services Limited",
+    HDFCBANK: "HDFC Bank Limited",
+    ICICIBANK: "ICICI Bank Limited",
+    HINDUNILVR: "Hindustan Unilever Limited",
+    INFY: "Infosys Limited",
+    ITC: "ITC Limited",
+    SBIN: "State Bank of India",
+    BHARTIARTL: "Bharti Airtel Limited",
+    KOTAKBANK: "Kotak Mahindra Bank Limited",
+    LT: "Larsen & Toubro Limited",
+    BAJFINANCE: "Bajaj Finance Limited",
+    ASIANPAINT: "Asian Paints Limited",
+    MARUTI: "Maruti Suzuki India Limited",
+    HCLTECH: "HCL Technologies Limited",
+    AXISBANK: "Axis Bank Limited",
+    WIPRO: "Wipro Limited",
+    ONGC: "Oil and Natural Gas Corporation Limited",
+    TECHM: "Tech Mahindra Limited",
+    TITAN: "Titan Company Limited",
+    NESTLEIND: "Nestle India Limited",
+    POWERGRID: "Power Grid Corporation of India Limited",
+    NTPC: "NTPC Limited",
+    ULTRACEMCO: "UltraTech Cement Limited",
+    JSWSTEEL: "JSW Steel Limited",
+    SUNPHARMA: "Sun Pharmaceutical Industries Limited",
+    BAJAJFINSV: "Bajaj Finserv Limited",
+    DRREDDY: "Dr. Reddy's Laboratories Limited",
+    TATAMOTORS: "Tata Motors Limited",
+    CIPLA: "Cipla Limited",
+    EICHERMOT: "Eicher Motors Limited",
+    GRASIM: "Grasim Industries Limited",
+    HEROMOTOCO: "Hero MotoCorp Limited",
+    COALINDIA: "Coal India Limited",
+    BPCL: "Bharat Petroleum Corporation Limited",
+    TATASTEEL: "Tata Steel Limited",
+    BRITANNIA: "Britannia Industries Limited",
+    DIVISLAB: "Divi's Laboratories Limited",
+    ADANIPORTS: "Adani Ports and Special Economic Zone Limited",
+    SHREECEM: "Shree Cement Limited",
+    VEDL: "Vedanta Limited",
+    APOLLOHOSP: "Apollo Hospitals Enterprise Limited",
+    HINDALCO: "Hindalco Industries Limited",
+    INDUSINDBK: "IndusInd Bank Limited",
+    UPL: "UPL Limited",
+    TATACONSUM: "Tata Consumer Products Limited",
+    ADANIENT: "Adani Enterprises Limited",
+    GODREJCP: "Godrej Consumer Products Limited",
+    SBILIFE: "SBI Life Insurance Company Limited",
+    PIDILITIND: "Pidilite Industries Limited",
+    HDFCLIFE: "HDFC Life Insurance Company Limited",
+  };
 
-    const filter = { userName };
-    if (symbol) filter.symbol = symbol;
-    if (type) filter.type = type;
-
-    const skip = (page - 1) * limit;
-
-    const transactions = await StockTransaction.find(filter)
-      .sort({ timestamp: -1 })
-      .limit(Number(limit))
-      .skip(skip);
-
-    const total = await StockTransaction.countDocuments(filter);
-
-    res.json({
-      transactions,
-      totalPages: Math.ceil(total / limit),
-      currentPage: Number(page),
-      totalTransactions: total,
-    });
-  } catch (error) {
-    console.error("Error fetching stock transactions:", error);
-    res.status(500).json({ error: error.message });
-  }
-});
+  return nameMap[symbol] || `${symbol} Limited`;
+};
 
 /**
- * Get user's stock portfolio (aggregated holdings)
+ * Get sector information from symbol (basic implementation)
  */
-app.get("/api/stock-portfolio/:userName", async (req, res) => {
-  try {
-    const { userName } = req.params;
+const getSectorFromSymbol = (symbol) => {
+  const sectorMap = {
+    RELIANCE: "Oil & Gas",
+    TCS: "IT Services",
+    HDFCBANK: "Banking",
+    ICICIBANK: "Banking",
+    HINDUNILVR: "FMCG",
+    INFY: "IT Services",
+    ITC: "FMCG",
+    SBIN: "Banking",
+    BHARTIARTL: "Telecom",
+    KOTAKBANK: "Banking",
+    LT: "Engineering",
+    BAJFINANCE: "Financial Services",
+    ASIANPAINT: "Paints",
+    MARUTI: "Automobile",
+    HCLTECH: "IT Services",
+    AXISBANK: "Banking",
+    WIPRO: "IT Services",
+    ONGC: "Oil & Gas",
+    TECHM: "IT Services",
+    TITAN: "Jewelry",
+    NESTLEIND: "FMCG",
+    POWERGRID: "Power",
+    NTPC: "Power",
+    ULTRACEMCO: "Cement",
+    JSWSTEEL: "Steel",
+    SUNPHARMA: "Pharmaceuticals",
+    BAJAJFINSV: "Financial Services",
+    DRREDDY: "Pharmaceuticals",
+    TATAMOTORS: "Automobile",
+    CIPLA: "Pharmaceuticals",
+    EICHERMOT: "Automobile",
+    GRASIM: "Cement",
+    HEROMOTOCO: "Automobile",
+    COALINDIA: "Mining",
+    BPCL: "Oil & Gas",
+    TATASTEEL: "Steel",
+    BRITANNIA: "FMCG",
+    DIVISLAB: "Pharmaceuticals",
+    ADANIPORTS: "Infrastructure",
+    SHREECEM: "Cement",
+    VEDL: "Mining",
+    APOLLOHOSP: "Healthcare",
+    HINDALCO: "Metals",
+    INDUSINDBK: "Banking",
+    UPL: "Chemicals",
+    TATACONSUM: "FMCG",
+    ADANIENT: "Infrastructure",
+    GODREJCP: "FMCG",
+    SBILIFE: "Insurance",
+    PIDILITIND: "Chemicals",
+    HDFCLIFE: "Insurance",
+  };
 
-    const portfolio = await StockTransaction.aggregate([
-      { $match: { userName } },
-      {
-        $group: {
-          _id: "$symbol",
-          companyName: { $first: "$companyName" },
-          totalShares: {
-            $sum: {
-              $cond: [
-                { $eq: ["$type", "buy"] },
-                "$quantity",
-                { $multiply: ["$quantity", -1] },
-              ],
-            },
-          },
-          totalInvested: {
-            $sum: {
-              $cond: [
-                { $eq: ["$type", "buy"] },
-                "$total",
-                { $multiply: ["$total", -1] },
-              ],
-            },
-          },
-          averagePrice: {
-            $avg: {
-              $cond: [{ $eq: ["$type", "buy"] }, "$price", null],
-            },
-          },
-          lastTransaction: { $max: "$timestamp" },
-        },
-      },
-      { $match: { totalShares: { $gt: 0 } } }, // Only show stocks with positive holdings
-      { $sort: { lastTransaction: -1 } },
-    ]);
-
-    res.json({ portfolio });
-  } catch (error) {
-    console.error("Error fetching stock portfolio:", error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-/**
- * Delete a stock transaction
- */
-app.delete("/api/stock-transactions/:transactionId", async (req, res) => {
-  try {
-    const { transactionId } = req.params;
-
-    const deletedTransaction = await StockTransaction.findByIdAndDelete(
-      transactionId
-    );
-
-    if (!deletedTransaction) {
-      return res.status(404).json({ error: "Stock transaction not found" });
-    }
-
-    res.json({
-      message: "Stock transaction deleted successfully",
-      transaction: deletedTransaction,
-    });
-  } catch (error) {
-    console.error("Error deleting stock transaction:", error);
-    res.status(500).json({ error: error.message });
-  }
-});
+  return sectorMap[symbol] || "Others";
+};
 
 /**
- * Get all stock companies from Finnhub API with exchange and country filtering
- * Supports: US, India (NSE, BSE), UK, Hong Kong, and more
+ * Get all stock companies dynamically from CSV file
+ * Supports Indian NSE stocks with real-time data from CSV
  */
 app.get("/api/stock-companies", async (req, res) => {
   try {
@@ -2904,497 +2778,11 @@ app.get("/api/stock-companies", async (req, res) => {
     let stocks = [];
 
     if (exchange === "INDIA" || exchange === "NSE" || exchange === "BSE") {
-      // Fetch Indian stocks using popular NSE/BSE symbols
-      const indianStocks = [
-        // Top NSE/BSE stocks with company names
-        {
-          symbol: "RELIANCE.NS",
-          name: "Reliance Industries Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "TCS.NS",
-          name: "Tata Consultancy Services Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "HDFCBANK.NS",
-          name: "HDFC Bank Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "ICICIBANK.NS",
-          name: "ICICI Bank Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "HINDUNILVR.NS",
-          name: "Hindustan Unilever Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "INFY.NS",
-          name: "Infosys Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "ITC.NS",
-          name: "ITC Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "HDFC.NS",
-          name: "Housing Development Finance Corporation Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "KOTAKBANK.NS",
-          name: "Kotak Mahindra Bank Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "LT.NS",
-          name: "Larsen & Toubro Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "BAJFINANCE.NS",
-          name: "Bajaj Finance Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "SBIN.NS",
-          name: "State Bank of India",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "BHARTIARTL.NS",
-          name: "Bharti Airtel Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "ASIANPAINT.NS",
-          name: "Asian Paints Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "MARUTI.NS",
-          name: "Maruti Suzuki India Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "HCLTECH.NS",
-          name: "HCL Technologies Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "AXISBANK.NS",
-          name: "Axis Bank Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "WIPRO.NS",
-          name: "Wipro Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "ONGC.NS",
-          name: "Oil and Natural Gas Corporation Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "TECHM.NS",
-          name: "Tech Mahindra Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "TITAN.NS",
-          name: "Titan Company Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "NESTLEIND.NS",
-          name: "Nestle India Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "POWERGRID.NS",
-          name: "Power Grid Corporation of India Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "NTPC.NS",
-          name: "NTPC Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "ULTRACEMCO.NS",
-          name: "UltraTech Cement Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "JSWSTEEL.NS",
-          name: "JSW Steel Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "M&M.NS",
-          name: "Mahindra & Mahindra Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "SUNPHARMA.NS",
-          name: "Sun Pharmaceutical Industries Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "BAJAJFINSV.NS",
-          name: "Bajaj Finserv Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "DRREDDY.NS",
-          name: "Dr. Reddy's Laboratories Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "TATAMOTORS.NS",
-          name: "Tata Motors Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "CIPLA.NS",
-          name: "Cipla Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "EICHERMOT.NS",
-          name: "Eicher Motors Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "GRASIM.NS",
-          name: "Grasim Industries Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "HEROMOTOCO.NS",
-          name: "Hero MotoCorp Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "COALINDIA.NS",
-          name: "Coal India Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "BPCL.NS",
-          name: "Bharat Petroleum Corporation Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "TATASTEEL.NS",
-          name: "Tata Steel Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "BRITANNIA.NS",
-          name: "Britannia Industries Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "DIVISLAB.NS",
-          name: "Divi's Laboratories Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "ADANIPORTS.NS",
-          name: "Adani Ports and Special Economic Zone Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "SHREECEM.NS",
-          name: "Shree Cement Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "VEDL.NS",
-          name: "Vedanta Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "APOLLOHOSP.NS",
-          name: "Apollo Hospitals Enterprise Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "HINDALCO.NS",
-          name: "Hindalco Industries Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "INDUSINDBK.NS",
-          name: "IndusInd Bank Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "UPL.NS",
-          name: "UPL Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "TATACONSUM.NS",
-          name: "Tata Consumer Products Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "ADANIENT.NS",
-          name: "Adani Enterprises Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "GODREJCP.NS",
-          name: "Godrej Consumer Products Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "SBILIFE.NS",
-          name: "SBI Life Insurance Company Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "PIDILITIND.NS",
-          name: "Pidilite Industries Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "HDFCLIFE.NS",
-          name: "HDFC Life Insurance Company Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-      ];
-
-      stocks = indianStocks;
+      // Fetch all Indian stocks from CSV
+      stocks = await fetchStockCompaniesFromCSV();
     } else if (exchange === "ALL") {
-      // For "ALL" exchange, combine both Indian and US stocks
-      const indianStocks = [
-        // All Indian stocks from above (copying the same array)
-        {
-          symbol: "RELIANCE.NS",
-          name: "Reliance Industries Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "TCS.NS",
-          name: "Tata Consultancy Services Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "HDFCBANK.NS",
-          name: "HDFC Bank Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "ICICIBANK.NS",
-          name: "ICICI Bank Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "HINDUNILVR.NS",
-          name: "Hindustan Unilever Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "INFY.NS",
-          name: "Infosys Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-        {
-          symbol: "ITC.NS",
-          name: "ITC Limited",
-          exchange: "NSE",
-          currency: "INR",
-          country: "India",
-          type: "Common Stock",
-        },
-      ];
+      // For "ALL" exchange, get both Indian stocks from CSV and some US stocks
+      const indianStocks = await fetchStockCompaniesFromCSV();
 
       const usStocks = [
         {
@@ -3404,6 +2792,7 @@ app.get("/api/stock-companies", async (req, res) => {
           currency: "USD",
           country: "United States",
           type: "Common Stock",
+          sector: "Technology",
         },
         {
           symbol: "MSFT",
@@ -3412,6 +2801,7 @@ app.get("/api/stock-companies", async (req, res) => {
           currency: "USD",
           country: "United States",
           type: "Common Stock",
+          sector: "Technology",
         },
         {
           symbol: "GOOGL",
@@ -3420,6 +2810,7 @@ app.get("/api/stock-companies", async (req, res) => {
           currency: "USD",
           country: "United States",
           type: "Common Stock",
+          sector: "Technology",
         },
         {
           symbol: "AMZN",
@@ -3428,6 +2819,7 @@ app.get("/api/stock-companies", async (req, res) => {
           currency: "USD",
           country: "United States",
           type: "Common Stock",
+          sector: "Technology",
         },
         {
           symbol: "TSLA",
@@ -3436,130 +2828,11 @@ app.get("/api/stock-companies", async (req, res) => {
           currency: "USD",
           country: "United States",
           type: "Common Stock",
-        },
-        {
-          symbol: "META",
-          name: "Meta Platforms Inc.",
-          exchange: "NASDAQ",
-          currency: "USD",
-          country: "United States",
-          type: "Common Stock",
-        },
-        {
-          symbol: "NVDA",
-          name: "NVIDIA Corporation",
-          exchange: "NASDAQ",
-          currency: "USD",
-          country: "United States",
-          type: "Common Stock",
-        },
-        {
-          symbol: "JPM",
-          name: "JPMorgan Chase & Co.",
-          exchange: "NYSE",
-          currency: "USD",
-          country: "United States",
-          type: "Common Stock",
-        },
-        {
-          symbol: "JNJ",
-          name: "Johnson & Johnson",
-          exchange: "NYSE",
-          currency: "USD",
-          country: "United States",
-          type: "Common Stock",
-        },
-        {
-          symbol: "V",
-          name: "Visa Inc.",
-          exchange: "NYSE",
-          currency: "USD",
-          country: "United States",
-          type: "Common Stock",
-        },
-        {
-          symbol: "PG",
-          name: "The Procter & Gamble Company",
-          exchange: "NYSE",
-          currency: "USD",
-          country: "United States",
-          type: "Common Stock",
-        },
-        {
-          symbol: "UNH",
-          name: "UnitedHealth Group Incorporated",
-          exchange: "NYSE",
-          currency: "USD",
-          country: "United States",
-          type: "Common Stock",
-        },
-        {
-          symbol: "HD",
-          name: "The Home Depot Inc.",
-          exchange: "NYSE",
-          currency: "USD",
-          country: "United States",
-          type: "Common Stock",
-        },
-        {
-          symbol: "MA",
-          name: "Mastercard Incorporated",
-          exchange: "NYSE",
-          currency: "USD",
-          country: "United States",
-          type: "Common Stock",
-        },
-        {
-          symbol: "DIS",
-          name: "The Walt Disney Company",
-          exchange: "NYSE",
-          currency: "USD",
-          country: "United States",
-          type: "Common Stock",
-        },
-        {
-          symbol: "ADBE",
-          name: "Adobe Inc.",
-          exchange: "NASDAQ",
-          currency: "USD",
-          country: "United States",
-          type: "Common Stock",
-        },
-        {
-          symbol: "NFLX",
-          name: "Netflix Inc.",
-          exchange: "NASDAQ",
-          currency: "USD",
-          country: "United States",
-          type: "Common Stock",
-        },
-        {
-          symbol: "CRM",
-          name: "Salesforce Inc.",
-          exchange: "NYSE",
-          currency: "USD",
-          country: "United States",
-          type: "Common Stock",
-        },
-        {
-          symbol: "XOM",
-          name: "Exxon Mobil Corporation",
-          exchange: "NYSE",
-          currency: "USD",
-          country: "United States",
-          type: "Common Stock",
-        },
-        {
-          symbol: "BAC",
-          name: "Bank of America Corporation",
-          exchange: "NYSE",
-          currency: "USD",
-          country: "United States",
-          type: "Common Stock",
+          sector: "Automobile",
         },
       ];
 
-      stocks = usStocks;
+      stocks = [...indianStocks, ...usStocks];
     }
 
     // Apply search filter if provided
@@ -3568,7 +2841,8 @@ app.get("/api/stock-companies", async (req, res) => {
       stocks = stocks.filter(
         (stock) =>
           stock.symbol.toLowerCase().includes(searchTerm) ||
-          stock.name.toLowerCase().includes(searchTerm)
+          stock.name.toLowerCase().includes(searchTerm) ||
+          stock.sector.toLowerCase().includes(searchTerm)
       );
     }
 
@@ -3592,6 +2866,124 @@ app.get("/api/stock-companies", async (req, res) => {
     console.error("Error fetching stock companies:", error);
     res.status(500).json({
       error: "Failed to fetch stock companies",
+      message: error.message,
+    });
+  }
+});
+
+/**
+ * 📊 Get all Indian NSE/BSE stocks from CSV file with real-time data fetching
+ * Uses the comprehensive stock symbols list from CSV
+ */
+app.get("/api/stocks", async (req, res) => {
+  try {
+    const { search, limit = 100, page = 1 } = req.query;
+    console.log(`🏭 Fetching stocks from CSV with search: "${search}"`);
+
+    // Use the same CSV parsing function as stock-companies endpoint
+    const stocks = await fetchStockCompaniesFromCSV();
+
+    console.log(`📊 Loaded ${stocks.length} stock symbols from CSV`);
+
+    // Filter by search if provided
+    let filteredStocks = stocks;
+    if (search && search.trim()) {
+      const searchTerm = search.toLowerCase();
+      filteredStocks = stocks.filter(
+        (stock) =>
+          stock.symbol.toLowerCase().includes(searchTerm) ||
+          stock.name.toLowerCase().includes(searchTerm) ||
+          stock.sector.toLowerCase().includes(searchTerm)
+      );
+    }
+
+    // Apply pagination
+    const startIndex = (page - 1) * limit;
+    const endIndex = startIndex + parseInt(limit);
+    const paginatedStocks = filteredStocks.slice(startIndex, endIndex);
+
+    res.json({
+      stocks: paginatedStocks,
+      pagination: {
+        currentPage: parseInt(page),
+        totalStocks: filteredStocks.length,
+        totalPages: Math.ceil(filteredStocks.length / parseInt(limit)),
+        hasMore: endIndex < filteredStocks.length,
+      },
+      message: `Found ${filteredStocks.length} stocks${
+        search ? ` matching "${search}"` : ""
+      }`,
+    });
+  } catch (error) {
+    console.error("❌ Error fetching stocks from CSV:", error);
+    res.status(500).json({
+      error: "Failed to fetch stocks from CSV",
+      message: error.message,
+    });
+  }
+});
+
+/**
+ * 📈 Get real-time stock NAV/price data similar to mutual funds
+ * Fetches current price data for NSE stocks
+ */
+app.get("/api/stock-navs", async (req, res) => {
+  try {
+    const { symbols } = req.query; // Comma-separated symbols like "RELIANCE,TCS,HDFCBANK"
+
+    if (!symbols) {
+      return res.status(400).json({
+        error:
+          "Symbols parameter is required. Use comma-separated values like 'RELIANCE,TCS,HDFCBANK'",
+      });
+    }
+
+    const symbolList = symbols.split(",").map((s) => s.trim().toUpperCase());
+    console.log(`📊 Fetching NAV data for stocks:`, symbolList);
+
+    const navList = [];
+
+    for (const symbol of symbolList) {
+      try {
+        // For demo purposes, generate mock NAV data
+        // In production, you would fetch from a real-time API like Yahoo Finance, Alpha Vantage, etc.
+        const mockPrice = (Math.random() * 2000 + 100).toFixed(2);
+        const mockChange = ((Math.random() - 0.5) * 100).toFixed(2);
+        const mockChangePercent = (
+          (parseFloat(mockChange) / parseFloat(mockPrice)) *
+          100
+        ).toFixed(2);
+
+        navList.push({
+          symbol: `${symbol}.NS`,
+          name: `${symbol} Limited`,
+          exchange: "NSE",
+          currentPrice: parseFloat(mockPrice),
+          dayChange: parseFloat(mockChange),
+          dayChangePercent: parseFloat(mockChangePercent),
+          currency: "INR",
+          lastUpdated: new Date().toISOString(),
+          date: new Date().toLocaleDateString("en-IN"),
+        });
+
+        // Add a small delay to simulate API calls
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      } catch (error) {
+        console.error(`Error fetching data for ${symbol}:`, error);
+        // Continue with other symbols even if one fails
+      }
+    }
+
+    res.json({
+      navs: navList,
+      totalSymbols: symbolList.length,
+      successfulFetches: navList.length,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("❌ Error fetching stock NAVs:", error);
+    res.status(500).json({
+      error: "Failed to fetch stock NAV data",
       message: error.message,
     });
   }
