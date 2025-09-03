@@ -4,19 +4,12 @@ const mongoose = require("mongoose");
 const cors = require("cors");
 const bodyParser = require("body-parser");
 const bcrypt = require("bcryptjs");
-const jwt = require("jsonwebtoken"); //n
+const jwt = require("jsonwebtoken");
 const axios = require("axios");
 const yahooFinance = require("yahoo-finance2").default;
 const cron = require("node-cron");
 const fs = require("fs");
 const path = require("path");
-// const nodemailer = require("nodemailer"); // Removed - no longer needed
-
-// Rate limiting for security-sensitive operations
-const forgotPasswordAttempts = new Map();
-const MAX_FORGOT_PASSWORD_ATTEMPTS = 3;
-const FORGOT_PASSWORD_WINDOW = 15 * 60 * 1000; // 15 minutes
-// const crypto = require("crypto"); // Removed - no longer needed
 const ObjectId = mongoose.Types.ObjectId;
 
 const PORT = process.env.PORT || 5000;
@@ -140,7 +133,7 @@ const Stock = mongoose.model("Stock", stockSchema);
 
 // ...existing code...
 
-// �🔹 **Fix Goal Collection Indexes**
+// 🔹 **Fix Goal Collection Indexes**
 const fixGoalIndexes = async () => {
   try {
     const indexes = await Goal.collection.getIndexes();
@@ -503,7 +496,7 @@ app.post("/api/login", async (req, res) => {
   }
 });
 
-// � **Forgot Password Route (Security PIN based)**
+// 🔹 **Forgot Password Route (Security PIN based)**
 app.post("/api/forgot-password", async (req, res) => {
   console.log("🔐 Forgot password route hit!");
   const { email, securityPin, newPassword } = req.body;
@@ -520,6 +513,10 @@ app.post("/api/forgot-password", async (req, res) => {
     const clientIP = req.ip || req.connection.remoteAddress;
     const attemptKey = `${sanitizedEmail}-${clientIP}`;
     const now = Date.now();
+
+    const forgotPasswordAttempts = new Map();
+    const MAX_FORGOT_PASSWORD_ATTEMPTS = 3;
+    const FORGOT_PASSWORD_WINDOW = 15 * 60 * 1000; // 15 minutes
 
     if (forgotPasswordAttempts.has(attemptKey)) {
       const attempts = forgotPasswordAttempts.get(attemptKey);
@@ -721,7 +718,7 @@ app.post("/api/check-security-pin", async (req, res) => {
   }
 });
 
-// �📧 **Google Authentication Route**
+// 📧 **Google Authentication Route**
 app.post("/api/google-auth", async (req, res) => {
   console.log("🔐 Google auth route hit!");
   const { googleId, email, name, picture } = req.body;
@@ -1629,7 +1626,6 @@ app.get("/test-token", verifyToken, async (req, res) => {
   }
 });
 
-// 📌 Simple token test without ObjectId conversion
 app.get("/test-simple", verifyToken, async (req, res) => {
   try {
     console.log("🧪 Simple test - User from token:", req.user);
@@ -2145,7 +2141,7 @@ app.get("/test-nav-parsing", async (req, res) => {
           sampleValidLines.push({
             schemeCode: schemeCode,
             schemeName: schemeName.substring(0, 50) + "...",
-            nav,
+            nav: nav,
           });
         }
       } else {
@@ -3060,7 +3056,7 @@ app.get("/api/stock-exchanges", async (req, res) => {
   }
 });
 
-// � **MF (Mutual Fund) CRUD Operations**
+// 🔹 **MF (Mutual Fund) CRUD Operations**
 
 /**
  * Get all MF investments for a user
@@ -3433,7 +3429,7 @@ app.get("/api/mf-analytics", verifyToken, async (req, res) => {
   }
 });
 
-// �🔹 **Start Server**
+// 🔹 **Start Server**
 // 📈 **Stock (Equity) CRUD Operations**
 
 /**
@@ -4179,6 +4175,66 @@ async function fetchQuoteStock(symbolObj) {
 // Initialize symbols
 const allStockSymbols = loadSymbolsFromCSVStock();
 
+// 🔹 **Daily Stock Data Update Cron Job**
+const updateAllStocksDaily = async () => {
+  try {
+    console.log("📈 Initiating daily stock data update...");
+    const symbolsToUpdate = allStockSymbols.map((s) => ({
+      symbol: s.symbol,
+      baseSymbol: s.baseSymbol,
+      exchange: s.exchange,
+    }));
+
+    const updates = [];
+
+    for (const symbolObj of symbolsToUpdate) {
+      const quote = await fetchQuoteStock(symbolObj);
+      if (quote) {
+        updates.push({
+          updateOne: {
+            filter: { symbol: quote.symbol },
+            update: {
+              $set: {
+                symbol: quote.symbol,
+                name: quote.name,
+                exchange: quote.exchange,
+                currentPrice: quote.price,
+                dayChange: quote.change,
+                dayChangePercent: quote.changePercent,
+                marketCap: quote.marketCap,
+                lastUpdated: quote.lastUpdated,
+              },
+            },
+            upsert: true,
+          },
+        });
+      }
+    }
+
+    if (updates.length > 0) {
+      console.log(
+        `💾 Starting bulk write to update ${updates.length} stocks...`
+      );
+      const result = await Stock.bulkWrite(updates, { ordered: false });
+      console.log(
+        `✅ Daily stock data updated successfully. Inserted: ${result.upsertedCount}, Modified: ${result.modifiedCount}`
+      );
+    } else {
+      console.log("ℹ️ No stock data to update.");
+    }
+  } catch (error) {
+    console.error("❌ Error during daily stock update:", error);
+  }
+};
+
+// Schedule daily stock data update at 3:00 PM India Time
+cron.schedule("0 15 * * *", updateAllStocksDaily, {
+  timezone: "Asia/Kolkata",
+});
+
+// Initial fetch on server start
+// updateAllStocksDaily(); // You can uncomment this to run on server start
+
 // 🔹 **ENHANCED STOCK ENDPOINTS WITH YAHOO FINANCE INTEGRATION**
 
 // API: Get paginated stocks with real data (like Python /api/navs endpoint)
@@ -4229,6 +4285,44 @@ app.get("/api/stocks", async (req, res) => {
   } catch (error) {
     console.error("❌ Error fetching stock data:", error);
     res.status(500).json({ error: "Failed to fetch stocks" });
+  }
+});
+
+// NEW: Endpoint to get daily-updated stocks from the database
+app.get("/api/daily-stocks", async (req, res) => {
+  try {
+    const { page = 1, limit = 20, search } = req.query;
+    const pageNum = parseInt(page);
+    const pageLimit = parseInt(limit);
+
+    let query = {};
+    if (search) {
+      query = {
+        $or: [
+          { symbol: { $regex: search, $options: "i" } },
+          { name: { $regex: search, $options: "i" } },
+        ],
+      };
+    }
+
+    const totalCount = await Stock.countDocuments(query);
+    const stocks = await Stock.find(query)
+      .sort({ name: 1 })
+      .skip((pageNum - 1) * pageLimit)
+      .limit(pageLimit);
+
+    res.json({
+      stocks,
+      pagination: {
+        currentPage: pageNum,
+        totalStocks: totalCount,
+        totalPages: Math.ceil(totalCount / pageLimit),
+        hasMore: pageNum * pageLimit < totalCount,
+      },
+    });
+  } catch (error) {
+    console.error("❌ Error fetching daily stocks:", error);
+    res.status(500).json({ error: "Failed to fetch daily stocks" });
   }
 });
 
