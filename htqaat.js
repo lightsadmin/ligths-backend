@@ -205,44 +205,84 @@ const updateAllStocksDaily = async () => {
       exchange: s.exchange,
     }));
 
-    const updates = [];
+    console.log(
+      `📊 Processing ${symbolsToUpdate.length} stocks in background...`
+    );
 
-    for (const symbolObj of symbolsToUpdate) {
-      const quote = await fetchQuoteStock(symbolObj);
-      if (quote) {
-        updates.push({
-          updateOne: {
-            filter: { symbol: quote.symbol },
-            update: {
-              $set: {
-                symbol: quote.symbol,
-                name: quote.name,
-                exchange: quote.exchange,
-                currentPrice: quote.currentPrice,
-                dayChange: quote.dayChange,
-                dayChangePercent: quote.dayChangePercent,
-                volume: quote.volume,
-                marketCap: quote.marketCap,
-                lastUpdated: quote.lastUpdated,
+    // Process stocks in smaller batches to avoid blocking the main thread
+    const batchSize = 10;
+    let processedCount = 0;
+
+    const processBatch = async (batch) => {
+      const updates = [];
+
+      for (const symbolObj of batch) {
+        try {
+          const quote = await fetchQuoteStock(symbolObj);
+          if (quote) {
+            updates.push({
+              updateOne: {
+                filter: { symbol: quote.symbol },
+                update: {
+                  $set: {
+                    symbol: quote.symbol,
+                    name: quote.name,
+                    exchange: quote.exchange,
+                    currentPrice: quote.currentPrice,
+                    dayChange: quote.dayChange,
+                    dayChangePercent: quote.dayChangePercent,
+                    volume: quote.volume,
+                    marketCap: quote.marketCap,
+                    lastUpdated: quote.lastUpdated,
+                  },
+                },
+                upsert: true,
               },
-            },
-            upsert: true,
-          },
-        });
+            });
+          }
+        } catch (error) {
+          console.error(
+            `❌ Error processing ${symbolObj.symbol}:`,
+            error.message
+          );
+        }
       }
-    }
 
-    if (updates.length > 0) {
+      if (updates.length > 0) {
+        try {
+          const result = await Stock.bulkWrite(updates, { ordered: false });
+          processedCount += updates.length;
+          console.log(
+            `💾 Batch update complete. Processed: ${processedCount}/${symbolsToUpdate.length} stocks (Inserted: ${result.upsertedCount}, Modified: ${result.modifiedCount})`
+          );
+        } catch (error) {
+          console.error("❌ Error during batch update:", error);
+        }
+      }
+    };
+
+    // Process all batches without blocking the main thread
+    const processBatchesAsync = async () => {
+      for (let i = 0; i < symbolsToUpdate.length; i += batchSize) {
+        const batch = symbolsToUpdate.slice(i, i + batchSize);
+        await processBatch(batch);
+
+        // Add a small delay between batches to avoid overwhelming Yahoo Finance API
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+
       console.log(
-        `💾 Starting bulk write to update ${updates.length} stocks...`
+        `✅ Daily stock data update completed. Total processed: ${processedCount} stocks`
       );
-      const result = await Stock.bulkWrite(updates, { ordered: false });
-      console.log(
-        `✅ Daily stock data updated successfully. Inserted: ${result.upsertedCount}, Modified: ${result.modifiedCount}`
-      );
-    } else {
-      console.log("ℹ️ No stock data to update.");
-    }
+    };
+
+    // Start processing batches asynchronously (non-blocking)
+    processBatchesAsync().catch((error) => {
+      console.error("❌ Error during async stock update:", error);
+    });
+
+    // Return immediately without blocking
+    console.log("📈 Stock update process started in background");
   } catch (error) {
     console.error("❌ Error during daily stock update:", error);
   }
@@ -254,7 +294,15 @@ const initializeStockService = () => {
   cron.schedule("0 15 * * *", updateAllStocksDaily, {
     timezone: "Asia/Kolkata",
   });
-  updateAllStocksDaily();
+
+  // Start stock update after server is fully started (delay to avoid blocking)
+  console.log("📈 Stock data update will start in 10 seconds...");
+  setTimeout(() => {
+    console.log("📈 Starting background stock data update...");
+    updateAllStocksDaily().catch((error) => {
+      console.error("❌ Error in background stock update:", error);
+    });
+  }, 10000); // 10 second delay
 };
 
 // Stock API routes
@@ -279,6 +327,30 @@ const setupStockRoutes = (app) => {
       }
 
       const stocks = await Stock.find(query).sort({ name: 1 });
+
+      // If no stocks in database, return basic symbol info
+      if (stocks.length === 0 && allStockSymbols.length > 0) {
+        console.log(
+          "📊 No stocks in database yet, returning basic symbol data"
+        );
+        const basicStocks = allStockSymbols.slice(0, 100).map((s) => ({
+          symbol: s.symbol,
+          name: s.baseSymbol,
+          exchange: s.exchange,
+          price: 0,
+          change: 0,
+          changePercent: 0,
+          volume: 0,
+          marketCap: 0,
+          lastUpdated: new Date(),
+        }));
+
+        return res.json({
+          stocks: basicStocks,
+          totalStocks: basicStocks.length,
+          note: "Stock data is being updated in background. Real data will be available shortly.",
+        });
+      }
 
       res.json({
         stocks: stocks,
