@@ -81,6 +81,28 @@ const investmentSchema = new mongoose.Schema({
 
 const Investment = mongoose.model("Investment", investmentSchema);
 
+// 📌 Define Stock Portfolio Schema (separate from general investments)
+const stockPortfolioSchema = new mongoose.Schema({
+  userName: { type: String, required: true },
+  symbol: { type: String, required: true },
+  name: { type: String, required: true },
+  exchange: { type: String, required: true },
+  quantity: { type: Number, required: true },
+  purchasePrice: { type: Number, required: true },
+  currentPrice: { type: Number, default: 0 },
+  investmentType: { type: String, default: "stock" },
+  notes: { type: String },
+  dateAdded: { type: Date, default: Date.now },
+  // Auto-delete after 1 week
+  expiresAt: {
+    type: Date,
+    default: () => new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days from now
+    index: { expireAfterSeconds: 0 }, // MongoDB TTL index for auto-deletion
+  },
+});
+
+const StockPortfolio = mongoose.model("StockPortfolio", stockPortfolioSchema);
+
 // 📌 Define Goal Schema
 const goalSchema = new mongoose.Schema({
   // goalSchema is defined here FIRST
@@ -2581,6 +2603,234 @@ const formatCompanyName = (symbol) => {
 // � **Setup Stock Service**
 stockService.setupStockRoutes(app);
 stockService.initializeStockService();
+
+// 🔹 **STOCK PORTFOLIO CRUD ENDPOINTS WITH AUTO-DELETE**
+
+/**
+ * Create a new stock entry in user's portfolio - auto-deletes after 1 week
+ */
+app.post("/api/stock-investments", async (req, res) => {
+  try {
+    console.log("📈 Creating stock investment:", req.body);
+
+    const {
+      userName,
+      symbol,
+      name,
+      exchange,
+      quantity,
+      purchasePrice,
+      currentPrice,
+      investmentType,
+      notes,
+    } = req.body;
+
+    // Validation
+    if (
+      !userName ||
+      !symbol ||
+      !name ||
+      !exchange ||
+      quantity === undefined ||
+      purchasePrice === undefined
+    ) {
+      return res.status(400).json({
+        error:
+          "Missing required fields: userName, symbol, name, exchange, quantity, purchasePrice",
+      });
+    }
+
+    const stockEntry = new StockPortfolio({
+      userName,
+      symbol: symbol.toUpperCase(),
+      name,
+      exchange: exchange.toUpperCase(),
+      quantity: parseFloat(quantity),
+      purchasePrice: parseFloat(purchasePrice),
+      currentPrice: parseFloat(currentPrice) || 0,
+      investmentType: investmentType || "stock",
+      notes: notes || "",
+      dateAdded: new Date(),
+      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+    });
+
+    const savedStock = await stockEntry.save();
+    console.log(
+      "✅ Stock entry created successfully, expires in 1 week:",
+      savedStock._id
+    );
+
+    res.status(201).json({
+      success: true,
+      message: "Stock added to portfolio successfully (auto-deletes in 1 week)",
+      stock: savedStock,
+    });
+  } catch (error) {
+    console.error("❌ Error creating stock entry:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Get all stock entries for a user
+ */
+app.get("/api/stock-investments/:userName", async (req, res) => {
+  try {
+    const { userName } = req.params;
+    console.log("📊 Getting stock portfolio for user:", userName);
+
+    const stocks = await StockPortfolio.find({ userName }).sort({
+      dateAdded: -1,
+    });
+    console.log(`✅ Found ${stocks.length} stocks for user ${userName}`);
+
+    res.json({
+      success: true,
+      stocks: stocks,
+    });
+  } catch (error) {
+    console.error("❌ Error fetching stock portfolio:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Update a stock entry
+ */
+app.put("/api/stock-investments/:userName/:stockId", async (req, res) => {
+  try {
+    const { userName, stockId } = req.params;
+    const updateData = req.body;
+    console.log(
+      `✏️ Updating stock ${stockId} for user ${userName}:`,
+      updateData
+    );
+
+    delete updateData.userName;
+    delete updateData._id;
+
+    if (updateData.quantity !== undefined)
+      updateData.quantity = parseFloat(updateData.quantity);
+    if (updateData.purchasePrice !== undefined)
+      updateData.purchasePrice = parseFloat(updateData.purchasePrice);
+    if (updateData.currentPrice !== undefined)
+      updateData.currentPrice = parseFloat(updateData.currentPrice);
+
+    const updatedStock = await StockPortfolio.findOneAndUpdate(
+      { _id: stockId, userName: userName },
+      updateData,
+      { new: true, runValidators: true }
+    );
+
+    if (!updatedStock) {
+      return res.status(404).json({
+        success: false,
+        error: "Stock not found in portfolio",
+      });
+    }
+
+    console.log("✅ Stock updated successfully:", updatedStock._id);
+    res.json({
+      success: true,
+      message: "Stock updated successfully",
+      stock: updatedStock,
+    });
+  } catch (error) {
+    console.error("❌ Error updating stock:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Delete a stock entry
+ */
+app.delete("/api/stock-investments/:userName/:stockId", async (req, res) => {
+  try {
+    const { userName, stockId } = req.params;
+    console.log(`🗑️ Deleting stock ${stockId} for user ${userName}`);
+
+    const deletedStock = await StockPortfolio.findOneAndDelete({
+      _id: stockId,
+      userName: userName,
+    });
+
+    if (!deletedStock) {
+      return res.status(404).json({
+        success: false,
+        error: "Stock not found in portfolio",
+      });
+    }
+
+    console.log("✅ Stock deleted successfully:", deletedStock.symbol);
+    res.json({
+      success: true,
+      message: "Stock removed from portfolio successfully",
+      deletedStock: deletedStock,
+    });
+  } catch (error) {
+    console.error("❌ Error deleting stock:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Get portfolio summary for a user
+ */
+app.get("/api/stock-portfolio-summary/:userName", async (req, res) => {
+  try {
+    const { userName } = req.params;
+    console.log("📊 Getting portfolio summary for user:", userName);
+
+    const stocks = await StockPortfolio.find({ userName });
+
+    const summary = {
+      totalStocks: stocks.length,
+      totalInvestment: 0,
+      currentValue: 0,
+      totalGainLoss: 0,
+      totalGainLossPercent: 0,
+    };
+
+    stocks.forEach((stock) => {
+      const investment = stock.quantity * stock.purchasePrice;
+      const currentValue =
+        stock.quantity * (stock.currentPrice || stock.purchasePrice);
+
+      summary.totalInvestment += investment;
+      summary.currentValue += currentValue;
+    });
+
+    summary.totalGainLoss = summary.currentValue - summary.totalInvestment;
+    summary.totalGainLossPercent =
+      summary.totalInvestment > 0
+        ? (summary.totalGainLoss / summary.totalInvestment) * 100
+        : 0;
+
+    console.log("✅ Portfolio summary calculated:", summary);
+    res.json({
+      success: true,
+      summary: summary,
+    });
+  } catch (error) {
+    console.error("❌ Error calculating portfolio summary:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 🔹 **Auto-cleanup cron job - runs daily at 2 AM to clean expired entries**
+cron.schedule("0 2 * * *", async () => {
+  try {
+    console.log("🕐 Running daily cleanup of expired stock entries...");
+    const result = await StockPortfolio.deleteMany({
+      expiresAt: { $lt: new Date() },
+    });
+    console.log(
+      `✅ Daily cleanup: Removed ${result.deletedCount} expired stock entries`
+    );
+  } catch (error) {
+    console.error("❌ Error in daily cleanup:", error);
+  }
+});
 
 // 🔹 **Start Server**
 app.listen(PORT, "0.0.0.0", () => {
