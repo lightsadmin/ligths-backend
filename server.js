@@ -2757,10 +2757,28 @@ app.post("/api/stock-investments", verifyToken, async (req, res) => {
   } catch (error) {
     console.error("❌ Error processing stock transaction:", error);
     console.error("❌ Error stack:", error.stack);
+
+    // Handle MongoDB duplicate key error specifically
+    if (error.code === 11000) {
+      console.error(
+        "❌ Duplicate key error detected - likely due to incorrect database indexes"
+      );
+
+      // Try to provide helpful error message and solution
+      return res.status(400).json({
+        error: "Database configuration error: duplicate key constraint",
+        message:
+          "There's an incorrect unique index in the database. Please contact support or try calling the /fix-stock-indexes endpoint.",
+        mongoError: error.message,
+        solution: "POST /fix-stock-indexes to repair database indexes",
+      });
+    }
+
     res.status(500).json({
       error: "Failed to process transaction",
       message: error.message,
       details: error.stack,
+      code: error.code,
     });
   }
 });
