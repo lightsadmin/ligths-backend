@@ -2961,10 +2961,17 @@ app.put(
       delete updateData._id;
 
       console.log("🔍 Update data received:", updateData);
-      console.log("🔍 sellQuantity check:", updateData.sellQuantity, typeof updateData.sellQuantity);
+      console.log(
+        "🔍 sellQuantity check:",
+        updateData.sellQuantity,
+        typeof updateData.sellQuantity
+      );
 
       // Handle selling/quantity reduction
-      if (updateData.sellQuantity !== undefined && updateData.sellQuantity !== null) {
+      if (
+        updateData.sellQuantity !== undefined &&
+        updateData.sellQuantity !== null
+      ) {
         const sellQuantity = parseFloat(updateData.sellQuantity);
         console.log(`💰 Processing sell order: ${sellQuantity} shares`);
 
@@ -3175,7 +3182,234 @@ app.get(
   }
 );
 
-// 🔹 **Auto-cleanup cron job - runs daily at 2 AM to clean expired entries**
+// � **SIMPLE STOCK BUY/SELL SYSTEM**
+
+/**
+ * BUY STOCK - Add shares to portfolio
+ */
+app.post("/api/stock-buy", verifyToken, async (req, res) => {
+  try {
+    const { userName, symbol, name, exchange, quantity, purchasePrice } =
+      req.body;
+    console.log(
+      `💰 BUY: ${quantity} shares of ${symbol} at ₹${purchasePrice} for ${userName}`
+    );
+
+    // Validation
+    if (!userName || !symbol || !quantity || !purchasePrice) {
+      return res.status(400).json({
+        error:
+          "Missing required fields: userName, symbol, quantity, purchasePrice",
+      });
+    }
+
+    const quantityNum = parseFloat(quantity);
+    const priceNum = parseFloat(purchasePrice);
+
+    if (
+      isNaN(quantityNum) ||
+      isNaN(priceNum) ||
+      quantityNum <= 0 ||
+      priceNum <= 0
+    ) {
+      return res.status(400).json({
+        error: "Invalid quantity or price values",
+      });
+    }
+
+    // Create new stock entry
+    const stockEntry = new StockPortfolio({
+      userName: userName,
+      symbol: symbol.toUpperCase(),
+      name: name || symbol,
+      exchange: exchange || "NSE",
+      quantity: quantityNum,
+      purchasePrice: priceNum,
+      currentPrice: priceNum,
+      investmentType: "stock",
+      notes: `BUY: ${quantityNum} shares at ₹${priceNum}`,
+      dateAdded: new Date(),
+      expiresAt: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000), // 1 year expiry
+    });
+
+    const savedStock = await stockEntry.save();
+    console.log("✅ Stock purchase successful:", savedStock._id);
+
+    res.json({
+      success: true,
+      message: `Successfully bought ${quantityNum} shares of ${symbol}`,
+      stock: savedStock,
+      action: "bought",
+      totalValue: quantityNum * priceNum,
+    });
+  } catch (error) {
+    console.error("❌ Error buying stock:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * SELL STOCK - Reduce or remove shares from portfolio
+ */
+app.post("/api/stock-sell", verifyToken, async (req, res) => {
+  try {
+    const { userName, symbol, quantity, sellPrice } = req.body;
+    console.log(
+      `💸 SELL: ${quantity} shares of ${symbol} at ₹${sellPrice} for ${userName}`
+    );
+
+    // Validation
+    if (!userName || !symbol || !quantity || !sellPrice) {
+      return res.status(400).json({
+        error: "Missing required fields: userName, symbol, quantity, sellPrice",
+      });
+    }
+
+    const sellQuantity = parseFloat(quantity);
+    const priceNum = parseFloat(sellPrice);
+
+    if (
+      isNaN(sellQuantity) ||
+      isNaN(priceNum) ||
+      sellQuantity <= 0 ||
+      priceNum <= 0
+    ) {
+      return res.status(400).json({
+        error: "Invalid quantity or price values",
+      });
+    }
+
+    // Find user's holdings for this symbol
+    const holdings = await StockPortfolio.find({
+      userName: userName,
+      symbol: symbol.toUpperCase(),
+    }).sort({ dateAdded: 1 }); // Oldest first (FIFO)
+
+    if (holdings.length === 0) {
+      return res.status(404).json({
+        error: "No holdings found for this stock",
+      });
+    }
+
+    // Calculate total shares available
+    const totalShares = holdings.reduce(
+      (sum, holding) => sum + holding.quantity,
+      0
+    );
+
+    if (sellQuantity > totalShares) {
+      return res.status(400).json({
+        error: `Cannot sell ${sellQuantity} shares. You only have ${totalShares} shares.`,
+      });
+    }
+
+    let remainingToSell = sellQuantity;
+    const updatedHoldings = [];
+    const deletedHoldings = [];
+
+    // Process sell using FIFO (First In, First Out)
+    for (const holding of holdings) {
+      if (remainingToSell <= 0) break;
+
+      if (holding.quantity <= remainingToSell) {
+        // Sell entire holding
+        remainingToSell -= holding.quantity;
+        deletedHoldings.push(holding);
+        await StockPortfolio.findByIdAndDelete(holding._id);
+        console.log(
+          `🗑️ Sold all ${holding.quantity} shares from holding ${holding._id}`
+        );
+      } else {
+        // Partially sell holding
+        const newQuantity = holding.quantity - remainingToSell;
+        remainingToSell = 0;
+
+        const updatedHolding = await StockPortfolio.findByIdAndUpdate(
+          holding._id,
+          { quantity: newQuantity },
+          { new: true }
+        );
+        updatedHoldings.push(updatedHolding);
+        console.log(
+          `✏️ Reduced holding ${holding._id}: ${holding.quantity} → ${newQuantity} shares`
+        );
+      }
+    }
+
+    console.log(`✅ Sell order completed: ${sellQuantity} shares of ${symbol}`);
+
+    res.json({
+      success: true,
+      message: `Successfully sold ${sellQuantity} shares of ${symbol}`,
+      action: "sold",
+      soldQuantity: sellQuantity,
+      sellPrice: priceNum,
+      totalValue: sellQuantity * priceNum,
+      updatedHoldings: updatedHoldings.length,
+      deletedHoldings: deletedHoldings.length,
+    });
+  } catch (error) {
+    console.error("❌ Error selling stock:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET USER PORTFOLIO - Get all holdings for a user
+ */
+app.get("/api/stock-portfolio/:userName", verifyToken, async (req, res) => {
+  try {
+    const { userName } = req.params;
+    console.log("📊 Getting portfolio for user:", userName);
+
+    const holdings = await StockPortfolio.find({ userName }).sort({
+      dateAdded: -1,
+    });
+
+    // Group by symbol and calculate totals
+    const portfolio = {};
+    holdings.forEach((holding) => {
+      const symbol = holding.symbol;
+      if (!portfolio[symbol]) {
+        portfolio[symbol] = {
+          symbol: symbol,
+          name: holding.name,
+          exchange: holding.exchange,
+          totalQuantity: 0,
+          totalInvested: 0,
+          avgPurchasePrice: 0,
+          currentPrice: holding.currentPrice,
+          holdings: [],
+        };
+      }
+
+      portfolio[symbol].totalQuantity += holding.quantity;
+      portfolio[symbol].totalInvested +=
+        holding.quantity * holding.purchasePrice;
+      portfolio[symbol].holdings.push(holding);
+    });
+
+    // Calculate average purchase price for each stock
+    Object.keys(portfolio).forEach((symbol) => {
+      const stock = portfolio[symbol];
+      stock.avgPurchasePrice = stock.totalInvested / stock.totalQuantity;
+      stock.currentValue = stock.totalQuantity * stock.currentPrice;
+      stock.profitLoss = stock.currentValue - stock.totalInvested;
+      stock.profitLossPercent = (stock.profitLoss / stock.totalInvested) * 100;
+    });
+
+    res.json({
+      success: true,
+      portfolio: Object.values(portfolio),
+      totalHoldings: holdings.length,
+    });
+  } catch (error) {
+    console.error("❌ Error getting portfolio:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// �🔹 **Auto-cleanup cron job - runs daily at 2 AM to clean expired entries**
 cron.schedule("0 2 * * *", async () => {
   try {
     console.log("🕐 Running daily cleanup of expired stock entries...");
