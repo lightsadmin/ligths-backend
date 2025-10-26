@@ -2960,9 +2960,12 @@ app.put(
       delete updateData.userName;
       delete updateData._id;
 
+      console.log("🔍 Update data received:", updateData);
+
       // Handle selling/quantity reduction
       if (updateData.sellQuantity !== undefined) {
         const sellQuantity = parseFloat(updateData.sellQuantity);
+        console.log(`💰 Processing sell order: ${sellQuantity} shares`);
 
         // Get current stock
         const currentStock = await StockPortfolio.findOne({
@@ -2977,6 +2980,8 @@ app.put(
           });
         }
 
+        console.log(`📊 Current stock quantity: ${currentStock.quantity}`);
+
         if (sellQuantity > currentStock.quantity) {
           return res.status(400).json({
             success: false,
@@ -2985,6 +2990,7 @@ app.put(
         }
 
         const newQuantity = currentStock.quantity - sellQuantity;
+        console.log(`🔢 New quantity will be: ${newQuantity}`);
 
         if (newQuantity <= 0) {
           // Delete the stock if all shares are sold
@@ -3006,6 +3012,7 @@ app.put(
           // Update the quantity
           updateData.quantity = newQuantity;
           delete updateData.sellQuantity; // Remove sellQuantity from update
+          delete updateData.sellPrice; // Remove sellPrice from update
           console.log(
             `✏️ Reduced quantity: ${currentStock.quantity} → ${newQuantity} shares`
           );
@@ -3036,14 +3043,26 @@ app.put(
       }
 
       console.log("✅ Stock updated successfully:", updatedStock._id);
+
+      // Check if this was a sell operation
+      const wasSellOperation = req.body.sellQuantity !== undefined;
+      const sellQuantity = wasSellOperation
+        ? parseFloat(req.body.sellQuantity)
+        : 0;
+
       res.json({
         success: true,
-        message:
-          updateData.sellQuantity !== undefined
-            ? `Successfully sold ${updateData.sellQuantity} shares`
-            : "Stock updated successfully",
+        message: wasSellOperation
+          ? `Successfully sold ${sellQuantity} shares. Remaining: ${updatedStock.quantity} shares`
+          : "Stock updated successfully",
         stock: updatedStock,
         action: "updated",
+        ...(wasSellOperation && {
+          soldQuantity: sellQuantity,
+          remainingQuantity: updatedStock.quantity,
+          totalValue:
+            sellQuantity * (req.body.sellPrice || updatedStock.purchasePrice),
+        }),
       });
     } catch (error) {
       console.error("❌ Error updating stock:", error);
