@@ -2609,9 +2609,9 @@ stockService.initializeStockService();
 /**
  * Create a new stock entry in user's portfolio - auto-deletes after 1 week
  */
-app.post("/api/stock-investments", async (req, res) => {
+app.post("/api/stock-investments", verifyToken, async (req, res) => {
   try {
-    console.log("📈 Creating stock investment:", req.body);
+    console.log("📈 Processing stock transaction:", req.body);
 
     const {
       userName,
@@ -2634,19 +2634,40 @@ app.post("/api/stock-investments", async (req, res) => {
       quantity === undefined ||
       purchasePrice === undefined
     ) {
+      console.error("❌ Missing required fields:", {
+        userName,
+        symbol,
+        name,
+        exchange,
+        quantity,
+        purchasePrice,
+      });
       return res.status(400).json({
         error:
           "Missing required fields: userName, symbol, name, exchange, quantity, purchasePrice",
+        received: { userName, symbol, name, exchange, quantity, purchasePrice },
       });
     }
 
+    const quantityNum = parseFloat(quantity);
+    const priceNum = parseFloat(purchasePrice);
+
+    if (isNaN(quantityNum) || isNaN(priceNum)) {
+      console.error("❌ Invalid numeric values:", { quantity, purchasePrice });
+      return res.status(400).json({
+        error: "Invalid numeric values for quantity or price",
+        received: { quantity, purchasePrice },
+      });
+    }
+
+    // Create a new transaction record for each buy/sell
     const stockEntry = new StockPortfolio({
       userName,
       symbol: symbol.toUpperCase(),
       name,
       exchange: exchange.toUpperCase(),
-      quantity: parseFloat(quantity),
-      purchasePrice: parseFloat(purchasePrice),
+      quantity: quantityNum, // Can be positive (buy) or negative (sell)
+      purchasePrice: priceNum,
       currentPrice: parseFloat(currentPrice) || 0,
       investmentType: investmentType || "stock",
       notes: notes || "",
@@ -2656,25 +2677,33 @@ app.post("/api/stock-investments", async (req, res) => {
 
     const savedStock = await stockEntry.save();
     console.log(
-      "✅ Stock entry created successfully, expires in 1 week:",
-      savedStock._id
+      "✅ Stock transaction recorded successfully, expires in 1 week:",
+      savedStock._id,
+      `Quantity: ${quantityNum}, Price: ${priceNum}`
     );
 
     res.status(201).json({
       success: true,
-      message: "Stock added to portfolio successfully (auto-deletes in 1 week)",
+      message: `Stock ${
+        quantityNum > 0 ? "purchase" : "sale"
+      } recorded successfully (auto-deletes in 1 week)`,
       stock: savedStock,
     });
   } catch (error) {
-    console.error("❌ Error creating stock entry:", error);
-    res.status(500).json({ error: error.message });
+    console.error("❌ Error processing stock transaction:", error);
+    console.error("❌ Error stack:", error.stack);
+    res.status(500).json({
+      error: "Failed to process transaction",
+      message: error.message,
+      details: error.stack,
+    });
   }
 });
 
 /**
  * Get all stock entries for a user
  */
-app.get("/api/stock-investments/:userName", async (req, res) => {
+app.get("/api/stock-investments/:userName", verifyToken, async (req, res) => {
   try {
     const { userName } = req.params;
     console.log("📊 Getting stock portfolio for user:", userName);
@@ -2697,125 +2726,137 @@ app.get("/api/stock-investments/:userName", async (req, res) => {
 /**
  * Update a stock entry
  */
-app.put("/api/stock-investments/:userName/:stockId", async (req, res) => {
-  try {
-    const { userName, stockId } = req.params;
-    const updateData = req.body;
-    console.log(
-      `✏️ Updating stock ${stockId} for user ${userName}:`,
-      updateData
-    );
+app.put(
+  "/api/stock-investments/:userName/:stockId",
+  verifyToken,
+  async (req, res) => {
+    try {
+      const { userName, stockId } = req.params;
+      const updateData = req.body;
+      console.log(
+        `✏️ Updating stock ${stockId} for user ${userName}:`,
+        updateData
+      );
 
-    delete updateData.userName;
-    delete updateData._id;
+      delete updateData.userName;
+      delete updateData._id;
 
-    if (updateData.quantity !== undefined)
-      updateData.quantity = parseFloat(updateData.quantity);
-    if (updateData.purchasePrice !== undefined)
-      updateData.purchasePrice = parseFloat(updateData.purchasePrice);
-    if (updateData.currentPrice !== undefined)
-      updateData.currentPrice = parseFloat(updateData.currentPrice);
+      if (updateData.quantity !== undefined)
+        updateData.quantity = parseFloat(updateData.quantity);
+      if (updateData.purchasePrice !== undefined)
+        updateData.purchasePrice = parseFloat(updateData.purchasePrice);
+      if (updateData.currentPrice !== undefined)
+        updateData.currentPrice = parseFloat(updateData.currentPrice);
 
-    const updatedStock = await StockPortfolio.findOneAndUpdate(
-      { _id: stockId, userName: userName },
-      updateData,
-      { new: true, runValidators: true }
-    );
+      const updatedStock = await StockPortfolio.findOneAndUpdate(
+        { _id: stockId, userName: userName },
+        updateData,
+        { new: true, runValidators: true }
+      );
 
-    if (!updatedStock) {
-      return res.status(404).json({
-        success: false,
-        error: "Stock not found in portfolio",
+      if (!updatedStock) {
+        return res.status(404).json({
+          success: false,
+          error: "Stock not found in portfolio",
+        });
+      }
+
+      console.log("✅ Stock updated successfully:", updatedStock._id);
+      res.json({
+        success: true,
+        message: "Stock updated successfully",
+        stock: updatedStock,
       });
+    } catch (error) {
+      console.error("❌ Error updating stock:", error);
+      res.status(500).json({ error: error.message });
     }
-
-    console.log("✅ Stock updated successfully:", updatedStock._id);
-    res.json({
-      success: true,
-      message: "Stock updated successfully",
-      stock: updatedStock,
-    });
-  } catch (error) {
-    console.error("❌ Error updating stock:", error);
-    res.status(500).json({ error: error.message });
   }
-});
+);
 
 /**
  * Delete a stock entry
  */
-app.delete("/api/stock-investments/:userName/:stockId", async (req, res) => {
-  try {
-    const { userName, stockId } = req.params;
-    console.log(`🗑️ Deleting stock ${stockId} for user ${userName}`);
+app.delete(
+  "/api/stock-investments/:userName/:stockId",
+  verifyToken,
+  async (req, res) => {
+    try {
+      const { userName, stockId } = req.params;
+      console.log(`🗑️ Deleting stock ${stockId} for user ${userName}`);
 
-    const deletedStock = await StockPortfolio.findOneAndDelete({
-      _id: stockId,
-      userName: userName,
-    });
-
-    if (!deletedStock) {
-      return res.status(404).json({
-        success: false,
-        error: "Stock not found in portfolio",
+      const deletedStock = await StockPortfolio.findOneAndDelete({
+        _id: stockId,
+        userName: userName,
       });
-    }
 
-    console.log("✅ Stock deleted successfully:", deletedStock.symbol);
-    res.json({
-      success: true,
-      message: "Stock removed from portfolio successfully",
-      deletedStock: deletedStock,
-    });
-  } catch (error) {
-    console.error("❌ Error deleting stock:", error);
-    res.status(500).json({ error: error.message });
+      if (!deletedStock) {
+        return res.status(404).json({
+          success: false,
+          error: "Stock not found in portfolio",
+        });
+      }
+
+      console.log("✅ Stock deleted successfully:", deletedStock.symbol);
+      res.json({
+        success: true,
+        message: "Stock removed from portfolio successfully",
+        deletedStock: deletedStock,
+      });
+    } catch (error) {
+      console.error("❌ Error deleting stock:", error);
+      res.status(500).json({ error: error.message });
+    }
   }
-});
+);
 
 /**
  * Get portfolio summary for a user
  */
-app.get("/api/stock-portfolio-summary/:userName", async (req, res) => {
-  try {
-    const { userName } = req.params;
-    console.log("📊 Getting portfolio summary for user:", userName);
+app.get(
+  "/api/stock-portfolio-summary/:userName",
+  verifyToken,
+  async (req, res) => {
+    try {
+      const { userName } = req.params;
+      console.log("📊 Getting portfolio summary for user:", userName);
 
-    const stocks = await StockPortfolio.find({ userName });
+      const stocks = await StockPortfolio.find({ userName });
 
-    const summary = {
-      totalStocks: stocks.length,
-      totalInvestment: 0,
-      currentValue: 0,
-      totalGainLoss: 0,
-      totalGainLossPercent: 0,
-    };
+      const summary = {
+        totalStocks: stocks.length,
+        totalInvestment: 0,
+        currentValue: 0,
+        totalGainLoss: 0,
+        totalGainLossPercent: 0,
+      };
 
-    stocks.forEach((stock) => {
-      const investment = stock.quantity * stock.purchasePrice;
-      const currentValue =
-        stock.quantity * (stock.currentPrice || stock.purchasePrice);
+      stocks.forEach((stock) => {
+        const investment = stock.quantity * stock.purchasePrice;
+        const currentValue =
+          stock.quantity * (stock.currentPrice || stock.purchasePrice);
 
-      summary.totalInvestment += investment;
-      summary.currentValue += currentValue;
-    });
+        summary.totalInvestment += investment;
+        summary.currentValue += currentValue;
+      });
 
-    summary.totalGainLoss = summary.currentValue - summary.totalInvestment;
-    summary.totalGainLossPercent =
-      summary.totalInvestment > 0
-        ? (summary.totalGainLoss / summary.totalInvestment) * 100
-        : 0;
+      summary.totalGainLoss = summary.currentValue - summary.totalInvestment;
+      summary.totalGainLossPercent =
+        summary.totalInvestment > 0
+          ? (summary.totalGainLoss / summary.totalInvestment) * 100
+          : 0;
 
-    console.log("✅ Portfolio summary calculated:", summary);
-    res.json({
-      success: true,
-      summary: summary,
-    });
-  } catch (error) {
-    console.error("❌ Error calculating portfolio summary:", error);
-    res.status(500).json({ error: error.message });
+      console.log("✅ Portfolio summary calculated:", summary);
+      res.json({
+        success: true,
+        summary: summary,
+      });
+    } catch (error) {
+      console.error("❌ Error calculating portfolio summary:", error);
+      res.status(500).json({ error: error.message });
+    }
   }
-});
+);
 
 // 🔹 **Auto-cleanup cron job - runs daily at 2 AM to clean expired entries**
 cron.schedule("0 2 * * *", async () => {
