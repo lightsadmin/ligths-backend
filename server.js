@@ -33,6 +33,8 @@ mongoose
     console.log("✅ Connected to MongoDB Atlas");
     // Fix any problematic indexes in the Goal collection
     await fixGoalIndexes();
+    // Fix any problematic indexes in the StockPortfolio collection
+    await fixStockPortfolioIndexes();
   })
   .catch((err) => console.error("❌ MongoDB Connection Error:", err));
 
@@ -175,6 +177,51 @@ const fixGoalIndexes = async () => {
   } catch (error) {
     console.log(
       "ℹ️ No problematic indexes found or error dropping indexes:",
+      error.message
+    );
+  }
+};
+
+// 🔹 **Fix StockPortfolio Collection Indexes**
+const fixStockPortfolioIndexes = async () => {
+  try {
+    const indexes = await StockPortfolio.collection.getIndexes();
+    console.log(
+      "📋 Current StockPortfolio collection indexes:",
+      Object.keys(indexes)
+    );
+
+    // Check if there's a unique index on userName that shouldn't be there
+    const indexNames = Object.keys(indexes);
+    for (const indexName of indexNames) {
+      const indexInfo = indexes[indexName];
+      console.log(`📋 Index ${indexName}:`, indexInfo);
+
+      // Drop problematic unique index on userName only (should allow multiple stocks per user)
+      if (indexName === "userName_1" && indexInfo.unique) {
+        console.log(`🗑️ Dropping problematic unique index: ${indexName}`);
+        await StockPortfolio.collection.dropIndex(indexName);
+        console.log(`✅ Dropped index: ${indexName}`);
+      }
+    }
+
+    // Ensure we have the correct indexes
+    // 1. Compound index for userName + symbol (should allow multiple transactions per stock)
+    await StockPortfolio.collection.createIndex(
+      { userName: 1, symbol: 1, dateAdded: -1 },
+      { background: true }
+    );
+    console.log("✅ Created compound index: userName + symbol + dateAdded");
+
+    // 2. TTL index for auto-deletion (if not already exists)
+    await StockPortfolio.collection.createIndex(
+      { expiresAt: 1 },
+      { expireAfterSeconds: 0, background: true }
+    );
+    console.log("✅ Ensured TTL index exists for auto-deletion");
+  } catch (error) {
+    console.log(
+      "ℹ️ No problematic StockPortfolio indexes found or error managing indexes:",
       error.message
     );
   }
@@ -1372,6 +1419,24 @@ app.get("/test", async (req, res) => {
     timestamp: new Date().toISOString(),
     ip: req.ip,
   });
+});
+
+// 🔹 **Manual Index Fix Endpoint**
+app.post("/fix-stock-indexes", async (req, res) => {
+  try {
+    console.log("🔧 Manual index fix requested");
+    await fixStockPortfolioIndexes();
+    res.json({
+      success: true,
+      message: "Stock portfolio indexes have been fixed",
+    });
+  } catch (error) {
+    console.error("❌ Error fixing indexes:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
 });
 
 // Get all goals for a user
