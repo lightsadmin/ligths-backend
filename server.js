@@ -186,28 +186,20 @@ const fixGoalIndexes = async () => {
 // 🔹 **Fix StockPortfolio Collection Indexes**
 const fixStockPortfolioIndexes = async () => {
   try {
-    const indexes = await StockPortfolio.collection.getIndexes();
+    const collection = StockPortfolio.collection;
+    const indexes = await collection.getIndexes();
     console.log(
       "📋 Current StockPortfolio collection indexes:",
       Object.keys(indexes)
     );
 
-    // Drop ALL problematic indexes that could cause duplicate key errors
+    // Step 1: Drop ALL indexes except _id (most aggressive approach)
     const indexNames = Object.keys(indexes);
     for (const indexName of indexNames) {
-      const indexInfo = indexes[indexName];
-      console.log(`📋 Index ${indexName}:`, indexInfo);
-
-      // Drop any problematic unique indexes including email, userName
-      if (
-        indexName.includes("email") ||
-        indexName.includes("userName_1") ||
-        (indexName === "userName_1" && indexInfo.unique) ||
-        indexName === "email_1"
-      ) {
-        console.log(`🗑️ Dropping problematic index: ${indexName}`);
+      if (indexName !== "_id_") {
+        console.log(`🗑️ Dropping index: ${indexName}`);
         try {
-          await StockPortfolio.collection.dropIndex(indexName);
+          await collection.dropIndex(indexName);
           console.log(`✅ Successfully dropped index: ${indexName}`);
         } catch (dropError) {
           console.log(`⚠️ Could not drop ${indexName}:`, dropError.message);
@@ -215,34 +207,35 @@ const fixStockPortfolioIndexes = async () => {
       }
     }
 
-    // Ensure we have the correct indexes
-    // 1. Compound index for userName + symbol (should allow multiple transactions per stock)
+    // Step 2: Wait a moment for the drops to complete
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+
+    // Step 3: Create only the indexes we need
     try {
-      await StockPortfolio.collection.createIndex(
+      // Compound index for userName + symbol + dateAdded (NO unique constraint)
+      await collection.createIndex(
         { userName: 1, symbol: 1, dateAdded: -1 },
         { background: true }
       );
       console.log("✅ Created compound index: userName + symbol + dateAdded");
     } catch (createError) {
-      console.log(
-        "ℹ️ Compound index already exists or creation failed:",
-        createError.message
-      );
+      console.log("ℹ️ Compound index creation failed:", createError.message);
     }
 
-    // 2. TTL index for auto-deletion (if not already exists)
     try {
-      await StockPortfolio.collection.createIndex(
+      // TTL index for auto-deletion
+      await collection.createIndex(
         { expiresAt: 1 },
         { expireAfterSeconds: 0, background: true }
       );
-      console.log("✅ Ensured TTL index exists for auto-deletion");
+      console.log("✅ Created TTL index for auto-deletion");
     } catch (ttlError) {
-      console.log(
-        "ℹ️ TTL index already exists or creation failed:",
-        ttlError.message
-      );
+      console.log("ℹ️ TTL index creation failed:", ttlError.message);
     }
+
+    // Step 4: Verify final indexes
+    const finalIndexes = await collection.getIndexes();
+    console.log("📋 Final StockPortfolio indexes:", Object.keys(finalIndexes));
   } catch (error) {
     console.log("ℹ️ Error managing StockPortfolio indexes:", error.message);
   }
@@ -2781,12 +2774,22 @@ app.post("/api/stock-investments", verifyToken, async (req, res) => {
       });
     }
 
-    // Try to create a new transaction record, with fallback for duplicate key error
+    // Always use unique userName to prevent duplicate key errors
+    // This is a workaround until indexes are properly fixed
+    const uniqueUserName = `${userName}_${Date.now()}_${Math.random()
+      .toString(36)
+      .substr(2, 9)}`;
+
+    console.log(
+      `🔧 Using unique userName: ${uniqueUserName} (original: ${userName})`
+    );
+
     let savedStock;
 
     try {
       const stockEntry = new StockPortfolio({
-        userName,
+        userName: uniqueUserName, // Use unique identifier
+        originalUserName: userName, // Store original for reference
         symbol: symbol.toUpperCase(),
         name,
         exchange: exchange.toUpperCase(),
@@ -2800,74 +2803,42 @@ app.post("/api/stock-investments", verifyToken, async (req, res) => {
       });
 
       savedStock = await stockEntry.save();
-    } catch (duplicateError) {
-      // If we get a duplicate key error due to the incorrect unique index on userName,
-      // try to work around it by updating the existing record or using findOneAndUpdate
-      if (duplicateError.code === 11000) {
-        console.log("⚠️ Duplicate key error detected:", duplicateError.message);
-        console.log("Trying upsert workaround...");
+      console.log("✅ Stock saved successfully with unique userName");
+    } catch (saveError) {
+      // Even with unique userName, if save fails, try once more with super unique ID
+      console.error(
+        "❌ Save failed even with unique userName:",
+        saveError.message
+      );
 
-        try {
-          // Use findOneAndUpdate with upsert to work around the unique constraint
-          savedStock = await StockPortfolio.findOneAndUpdate(
-            {
-              userName: userName,
-              symbol: symbol.toUpperCase(),
-            },
-            {
-              $set: {
-                name,
-                exchange: exchange.toUpperCase(),
-                quantity: quantityNum,
-                purchasePrice: priceNum,
-                currentPrice: parseFloat(currentPrice) || 0,
-                investmentType: investmentType || "stock",
-                notes: notes || "",
-                dateAdded: new Date(),
-                expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-              },
-            },
-            {
-              upsert: true,
-              new: true,
-              runValidators: true,
-            }
-          );
+      try {
+        const superUniqueUserName = `${userName}_${Date.now()}_${Math.random()
+          .toString(36)
+          .substr(2, 15)}`;
+        console.log(
+          `🔧 Retrying with super unique userName: ${superUniqueUserName}`
+        );
 
-          console.log("✅ Worked around duplicate key constraint using upsert");
-        } catch (upsertError) {
-          console.error(
-            "❌ Upsert workaround also failed:",
-            upsertError.message
-          );
+        const retryStock = new StockPortfolio({
+          userName: superUniqueUserName,
+          originalUserName: userName,
+          symbol: symbol.toUpperCase(),
+          name,
+          exchange: exchange.toUpperCase(),
+          quantity: quantityNum,
+          purchasePrice: priceNum,
+          currentPrice: parseFloat(currentPrice) || 0,
+          investmentType: investmentType || "stock",
+          notes: notes || "",
+          dateAdded: new Date(),
+          expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+        });
 
-          // If upsert also fails, just create a basic entry with timestamp to make it unique
-          try {
-            const timestampedStock = new StockPortfolio({
-              userName: `${userName}_${Date.now()}`, // Make userName unique with timestamp
-              originalUserName: userName, // Keep original for reference
-              symbol: symbol.toUpperCase(),
-              name,
-              exchange: exchange.toUpperCase(),
-              quantity: quantityNum,
-              purchasePrice: priceNum,
-              currentPrice: parseFloat(currentPrice) || 0,
-              investmentType: investmentType || "stock",
-              notes: notes || "",
-              dateAdded: new Date(),
-              expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-            });
-
-            savedStock = await timestampedStock.save();
-            console.log("✅ Used timestamped userName as final workaround");
-          } catch (finalError) {
-            console.error("❌ All workarounds failed:", finalError.message);
-            throw finalError;
-          }
-        }
-      } else {
-        // If it's a different error, re-throw it
-        throw duplicateError;
+        savedStock = await retryStock.save();
+        console.log("✅ Saved successfully with super unique userName");
+      } catch (finalError) {
+        console.error("❌ All save attempts failed:", finalError.message);
+        throw finalError;
       }
     }
     console.log(
