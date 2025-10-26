@@ -2961,11 +2961,20 @@ app.put(
       delete updateData._id;
 
       console.log("🔍 Update data received:", updateData);
+      console.log("🔍 sellQuantity check:", updateData.sellQuantity, typeof updateData.sellQuantity);
 
       // Handle selling/quantity reduction
-      if (updateData.sellQuantity !== undefined) {
+      if (updateData.sellQuantity !== undefined && updateData.sellQuantity !== null) {
         const sellQuantity = parseFloat(updateData.sellQuantity);
         console.log(`💰 Processing sell order: ${sellQuantity} shares`);
+
+        // Validate sell quantity
+        if (isNaN(sellQuantity) || sellQuantity <= 0) {
+          return res.status(400).json({
+            success: false,
+            error: "Invalid sell quantity",
+          });
+        }
 
         // Get current stock
         const currentStock = await StockPortfolio.findOne({
