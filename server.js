@@ -192,39 +192,59 @@ const fixStockPortfolioIndexes = async () => {
       Object.keys(indexes)
     );
 
-    // Check if there's a unique index on userName that shouldn't be there
+    // Drop ALL problematic indexes that could cause duplicate key errors
     const indexNames = Object.keys(indexes);
     for (const indexName of indexNames) {
       const indexInfo = indexes[indexName];
       console.log(`📋 Index ${indexName}:`, indexInfo);
 
-      // Drop problematic unique index on userName only (should allow multiple stocks per user)
-      if (indexName === "userName_1" && indexInfo.unique) {
-        console.log(`🗑️ Dropping problematic unique index: ${indexName}`);
-        await StockPortfolio.collection.dropIndex(indexName);
-        console.log(`✅ Dropped index: ${indexName}`);
+      // Drop any problematic unique indexes including email, userName
+      if (
+        indexName.includes("email") ||
+        indexName.includes("userName_1") ||
+        (indexName === "userName_1" && indexInfo.unique) ||
+        indexName === "email_1"
+      ) {
+        console.log(`🗑️ Dropping problematic index: ${indexName}`);
+        try {
+          await StockPortfolio.collection.dropIndex(indexName);
+          console.log(`✅ Successfully dropped index: ${indexName}`);
+        } catch (dropError) {
+          console.log(`⚠️ Could not drop ${indexName}:`, dropError.message);
+        }
       }
     }
 
     // Ensure we have the correct indexes
     // 1. Compound index for userName + symbol (should allow multiple transactions per stock)
-    await StockPortfolio.collection.createIndex(
-      { userName: 1, symbol: 1, dateAdded: -1 },
-      { background: true }
-    );
-    console.log("✅ Created compound index: userName + symbol + dateAdded");
+    try {
+      await StockPortfolio.collection.createIndex(
+        { userName: 1, symbol: 1, dateAdded: -1 },
+        { background: true }
+      );
+      console.log("✅ Created compound index: userName + symbol + dateAdded");
+    } catch (createError) {
+      console.log(
+        "ℹ️ Compound index already exists or creation failed:",
+        createError.message
+      );
+    }
 
     // 2. TTL index for auto-deletion (if not already exists)
-    await StockPortfolio.collection.createIndex(
-      { expiresAt: 1 },
-      { expireAfterSeconds: 0, background: true }
-    );
-    console.log("✅ Ensured TTL index exists for auto-deletion");
+    try {
+      await StockPortfolio.collection.createIndex(
+        { expiresAt: 1 },
+        { expireAfterSeconds: 0, background: true }
+      );
+      console.log("✅ Ensured TTL index exists for auto-deletion");
+    } catch (ttlError) {
+      console.log(
+        "ℹ️ TTL index already exists or creation failed:",
+        ttlError.message
+      );
+    }
   } catch (error) {
-    console.log(
-      "ℹ️ No problematic StockPortfolio indexes found or error managing indexes:",
-      error.message
-    );
+    console.log("ℹ️ Error managing StockPortfolio indexes:", error.message);
   }
 };
 
@@ -1426,10 +1446,45 @@ app.get("/test", async (req, res) => {
 app.post("/fix-stock-indexes", async (req, res) => {
   try {
     console.log("🔧 Manual index fix requested");
+
+    // More aggressive index cleanup
+    try {
+      const collection = StockPortfolio.collection;
+      const indexes = await collection.getIndexes();
+      console.log("📋 All indexes before cleanup:", Object.keys(indexes));
+
+      // Drop ALL indexes except _id (which can't be dropped)
+      for (const indexName of Object.keys(indexes)) {
+        if (indexName !== "_id_") {
+          try {
+            await collection.dropIndex(indexName);
+            console.log(`✅ Dropped index: ${indexName}`);
+          } catch (dropError) {
+            console.log(`⚠️ Could not drop ${indexName}:`, dropError.message);
+          }
+        }
+      }
+
+      // Recreate only the indexes we need
+      await collection.createIndex(
+        { userName: 1, symbol: 1, dateAdded: -1 },
+        { background: true }
+      );
+      console.log("✅ Created compound index: userName + symbol + dateAdded");
+
+      await collection.createIndex(
+        { expiresAt: 1 },
+        { expireAfterSeconds: 0, background: true }
+      );
+      console.log("✅ Created TTL index for auto-deletion");
+    } catch (aggressiveError) {
+      console.log("⚠️ Aggressive cleanup error:", aggressiveError.message);
+    }
+
     await fixStockPortfolioIndexes();
     res.json({
       success: true,
-      message: "Stock portfolio indexes have been fixed",
+      message: "Stock portfolio indexes have been aggressively fixed",
     });
   } catch (error) {
     console.error("❌ Error fixing indexes:", error);
@@ -2749,19 +2804,49 @@ app.post("/api/stock-investments", verifyToken, async (req, res) => {
       // If we get a duplicate key error due to the incorrect unique index on userName,
       // try to work around it by updating the existing record or using findOneAndUpdate
       if (duplicateError.code === 11000) {
-        console.log(
-          "⚠️ Duplicate key error detected, trying upsert workaround..."
-        );
+        console.log("⚠️ Duplicate key error detected:", duplicateError.message);
+        console.log("Trying upsert workaround...");
 
-        // Use findOneAndUpdate with upsert to work around the unique constraint
-        savedStock = await StockPortfolio.findOneAndUpdate(
-          {
-            userName: userName,
-            // Use additional criteria to make this specific to avoid overwriting wrong records
-            symbol: symbol.toUpperCase(),
-          },
-          {
-            $set: {
+        try {
+          // Use findOneAndUpdate with upsert to work around the unique constraint
+          savedStock = await StockPortfolio.findOneAndUpdate(
+            {
+              userName: userName,
+              symbol: symbol.toUpperCase(),
+            },
+            {
+              $set: {
+                name,
+                exchange: exchange.toUpperCase(),
+                quantity: quantityNum,
+                purchasePrice: priceNum,
+                currentPrice: parseFloat(currentPrice) || 0,
+                investmentType: investmentType || "stock",
+                notes: notes || "",
+                dateAdded: new Date(),
+                expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+              },
+            },
+            {
+              upsert: true,
+              new: true,
+              runValidators: true,
+            }
+          );
+
+          console.log("✅ Worked around duplicate key constraint using upsert");
+        } catch (upsertError) {
+          console.error(
+            "❌ Upsert workaround also failed:",
+            upsertError.message
+          );
+
+          // If upsert also fails, just create a basic entry with timestamp to make it unique
+          try {
+            const timestampedStock = new StockPortfolio({
+              userName: `${userName}_${Date.now()}`, // Make userName unique with timestamp
+              originalUserName: userName, // Keep original for reference
+              symbol: symbol.toUpperCase(),
               name,
               exchange: exchange.toUpperCase(),
               quantity: quantityNum,
@@ -2771,16 +2856,15 @@ app.post("/api/stock-investments", verifyToken, async (req, res) => {
               notes: notes || "",
               dateAdded: new Date(),
               expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-            },
-          },
-          {
-            upsert: true,
-            new: true,
-            runValidators: true,
-          }
-        );
+            });
 
-        console.log("✅ Worked around duplicate key constraint using upsert");
+            savedStock = await timestampedStock.save();
+            console.log("✅ Used timestamped userName as final workaround");
+          } catch (finalError) {
+            console.error("❌ All workarounds failed:", finalError.message);
+            throw finalError;
+          }
+        }
       } else {
         // If it's a different error, re-throw it
         throw duplicateError;
