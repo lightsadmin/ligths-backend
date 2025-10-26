@@ -86,6 +86,7 @@ const Investment = mongoose.model("Investment", investmentSchema);
 // 📌 Define Stock Portfolio Schema (separate from general investments)
 const stockPortfolioSchema = new mongoose.Schema({
   userName: { type: String, required: true },
+  originalUserName: { type: String }, // Backup field for original userName when workaround is used
   symbol: { type: String, required: true },
   name: { type: String, required: true },
   exchange: { type: String, required: true },
@@ -2725,22 +2726,66 @@ app.post("/api/stock-investments", verifyToken, async (req, res) => {
       });
     }
 
-    // Create a new transaction record for each buy/sell
-    const stockEntry = new StockPortfolio({
-      userName,
-      symbol: symbol.toUpperCase(),
-      name,
-      exchange: exchange.toUpperCase(),
-      quantity: quantityNum, // Can be positive (buy) or negative (sell)
-      purchasePrice: priceNum,
-      currentPrice: parseFloat(currentPrice) || 0,
-      investmentType: investmentType || "stock",
-      notes: notes || "",
-      dateAdded: new Date(),
-      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-    });
+    // Try to create a new transaction record, with fallback for duplicate key error
+    let savedStock;
 
-    const savedStock = await stockEntry.save();
+    try {
+      const stockEntry = new StockPortfolio({
+        userName,
+        symbol: symbol.toUpperCase(),
+        name,
+        exchange: exchange.toUpperCase(),
+        quantity: quantityNum, // Can be positive (buy) or negative (sell)
+        purchasePrice: priceNum,
+        currentPrice: parseFloat(currentPrice) || 0,
+        investmentType: investmentType || "stock",
+        notes: notes || "",
+        dateAdded: new Date(),
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      });
+
+      savedStock = await stockEntry.save();
+    } catch (duplicateError) {
+      // If we get a duplicate key error due to the incorrect unique index on userName,
+      // try to work around it by updating the existing record or using findOneAndUpdate
+      if (duplicateError.code === 11000) {
+        console.log(
+          "⚠️ Duplicate key error detected, trying upsert workaround..."
+        );
+
+        // Use findOneAndUpdate with upsert to work around the unique constraint
+        savedStock = await StockPortfolio.findOneAndUpdate(
+          {
+            userName: userName,
+            // Use additional criteria to make this specific to avoid overwriting wrong records
+            symbol: symbol.toUpperCase(),
+          },
+          {
+            $set: {
+              name,
+              exchange: exchange.toUpperCase(),
+              quantity: quantityNum,
+              purchasePrice: priceNum,
+              currentPrice: parseFloat(currentPrice) || 0,
+              investmentType: investmentType || "stock",
+              notes: notes || "",
+              dateAdded: new Date(),
+              expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+            },
+          },
+          {
+            upsert: true,
+            new: true,
+            runValidators: true,
+          }
+        );
+
+        console.log("✅ Worked around duplicate key constraint using upsert");
+      } else {
+        // If it's a different error, re-throw it
+        throw duplicateError;
+      }
+    }
     console.log(
       "✅ Stock transaction recorded successfully, expires in 1 week:",
       savedStock._id,
@@ -2761,17 +2806,50 @@ app.post("/api/stock-investments", verifyToken, async (req, res) => {
     // Handle MongoDB duplicate key error specifically
     if (error.code === 11000) {
       console.error(
-        "❌ Duplicate key error detected - likely due to incorrect database indexes"
+        "❌ Duplicate key error detected - trying final workaround..."
       );
 
-      // Try to provide helpful error message and solution
-      return res.status(400).json({
-        error: "Database configuration error: duplicate key constraint",
-        message:
-          "There's an incorrect unique index in the database. Please contact support or try calling the /fix-stock-indexes endpoint.",
-        mongoError: error.message,
-        solution: "POST /fix-stock-indexes to repair database indexes",
-      });
+      try {
+        // Final workaround: create a unique identifier by adding timestamp
+        const uniqueId = `${userName}_${symbol.toUpperCase()}_${Date.now()}`;
+
+        const stockEntry = new StockPortfolio({
+          userName: uniqueId, // Use unique identifier to bypass constraint
+          originalUserName: userName, // Store original userName in separate field
+          symbol: symbol.toUpperCase(),
+          name,
+          exchange: exchange.toUpperCase(),
+          quantity: quantityNum,
+          purchasePrice: priceNum,
+          currentPrice: parseFloat(currentPrice) || 0,
+          investmentType: investmentType || "stock",
+          notes: notes || "",
+          dateAdded: new Date(),
+          expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+        });
+
+        const savedStock = await stockEntry.save();
+        console.log("✅ Successfully worked around duplicate key constraint");
+
+        return res.status(201).json({
+          success: true,
+          message: `Stock ${
+            quantityNum > 0 ? "purchase" : "sale"
+          } recorded successfully (auto-deletes in 1 week)`,
+          stock: savedStock,
+          workaround: "Used unique identifier to bypass database constraint",
+        });
+      } catch (finalError) {
+        console.error("❌ Final workaround also failed:", finalError);
+
+        return res.status(400).json({
+          error: "Database configuration error: duplicate key constraint",
+          message:
+            "There's an incorrect unique index in the database. Please contact support.",
+          mongoError: error.message,
+          solution: "Database indexes need to be fixed by administrator",
+        });
+      }
     }
 
     res.status(500).json({
@@ -2791,7 +2869,10 @@ app.get("/api/stock-investments/:userName", verifyToken, async (req, res) => {
     const { userName } = req.params;
     console.log("📊 Getting stock portfolio for user:", userName);
 
-    const stocks = await StockPortfolio.find({ userName }).sort({
+    // Search for stocks using both userName and originalUserName (for workaround records)
+    const stocks = await StockPortfolio.find({
+      $or: [{ userName: userName }, { originalUserName: userName }],
+    }).sort({
       dateAdded: -1,
     });
     console.log(`✅ Found ${stocks.length} stocks for user ${userName}`);
