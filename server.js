@@ -3077,6 +3077,130 @@ app.get(
   }
 );
 
+/**
+ * Sell stocks - Reduces quantity from existing holdings
+ */
+app.post("/api/stock-sell", verifyToken, async (req, res) => {
+  try {
+    const { userName, symbol, quantity, sellPrice } = req.body;
+    console.log(
+      `💰 Processing sell order: ${quantity} shares of ${symbol} for ${userName}`
+    );
+
+    // Validation
+    if (!userName || !symbol || !quantity || !sellPrice) {
+      return res.status(400).json({
+        error: "Missing required fields: userName, symbol, quantity, sellPrice",
+      });
+    }
+
+    const quantityNum = parseFloat(quantity);
+    const priceNum = parseFloat(sellPrice);
+
+    if (isNaN(quantityNum) || isNaN(priceNum) || quantityNum <= 0) {
+      return res.status(400).json({
+        error: "Invalid quantity or price values",
+      });
+    }
+
+    // Find all holdings for this user and symbol
+    const holdings = await StockPortfolio.find({
+      $or: [{ userName: userName }, { originalUserName: userName }],
+      symbol: symbol.toUpperCase(),
+      quantity: { $gt: 0 }, // Only positive holdings
+    }).sort({ dateAdded: 1 }); // FIFO - First In, First Out
+
+    if (holdings.length === 0) {
+      return res.status(404).json({
+        error: "No holdings found for this stock",
+      });
+    }
+
+    // Calculate total holdings
+    const totalHoldings = holdings.reduce(
+      (sum, holding) => sum + holding.quantity,
+      0
+    );
+
+    if (quantityNum > totalHoldings) {
+      return res.status(400).json({
+        error: `Cannot sell ${quantityNum} shares. You only have ${totalHoldings} shares.`,
+      });
+    }
+
+    let remainingToSell = quantityNum;
+    const updatedHoldings = [];
+    const deletedHoldings = [];
+
+    // Process sell order using FIFO
+    for (const holding of holdings) {
+      if (remainingToSell <= 0) break;
+
+      if (holding.quantity <= remainingToSell) {
+        // Sell entire holding
+        remainingToSell -= holding.quantity;
+        deletedHoldings.push(holding);
+
+        await StockPortfolio.findByIdAndDelete(holding._id);
+        console.log(`🗑️ Deleted holding: ${holding.quantity} shares`);
+      } else {
+        // Partially sell holding
+        const newQuantity = holding.quantity - remainingToSell;
+        remainingToSell = 0;
+
+        const updatedHolding = await StockPortfolio.findByIdAndUpdate(
+          holding._id,
+          { quantity: newQuantity },
+          { new: true }
+        );
+        updatedHoldings.push(updatedHolding);
+        console.log(
+          `✏️ Updated holding: ${holding.quantity} → ${newQuantity} shares`
+        );
+      }
+    }
+
+    // Create a sell transaction record (negative quantity) for tracking
+    const sellRecord = new StockPortfolio({
+      userName: `${userName}_sell_${Date.now()}`,
+      originalUserName: userName,
+      symbol: symbol.toUpperCase(),
+      name: holdings[0].name,
+      exchange: holdings[0].exchange,
+      quantity: -quantityNum, // Negative for sell tracking
+      purchasePrice: priceNum,
+      currentPrice: priceNum,
+      investmentType: "stock_sell",
+      notes: `Sold ${quantityNum} shares at ${priceNum}`,
+      dateAdded: new Date(),
+      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+    });
+
+    await sellRecord.save();
+
+    console.log(`✅ Sell order completed: ${quantityNum} shares of ${symbol}`);
+
+    res.json({
+      success: true,
+      message: `Successfully sold ${quantityNum} shares of ${symbol}`,
+      sellDetails: {
+        quantitySold: quantityNum,
+        sellPrice: priceNum,
+        totalValue: quantityNum * priceNum,
+        updatedHoldings: updatedHoldings.length,
+        deletedHoldings: deletedHoldings.length,
+      },
+      sellRecord: sellRecord,
+    });
+  } catch (error) {
+    console.error("❌ Error processing sell order:", error);
+    res.status(500).json({
+      error: "Failed to process sell order",
+      message: error.message,
+    });
+  }
+});
+
 // 🔹 **Auto-cleanup cron job - runs daily at 2 AM to clean expired entries**
 cron.schedule("0 2 * * *", async () => {
   try {
