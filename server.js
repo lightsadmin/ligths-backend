@@ -2992,7 +2992,7 @@ app.put(
         const newQuantity = currentStock.quantity - sellQuantity;
         console.log(`🔢 New quantity will be: ${newQuantity}`);
 
-        if (newQuantity <= 0) {
+        if (newQuantity <= 0 || sellQuantity >= currentStock.quantity) {
           // Delete the stock if all shares are sold
           await StockPortfolio.findByIdAndDelete(stockId);
           console.log(
@@ -3003,18 +3003,27 @@ app.put(
             success: true,
             message: `Successfully sold all ${currentStock.quantity} shares`,
             action: "deleted",
-            soldQuantity: sellQuantity,
+            soldQuantity: currentStock.quantity,
             totalValue:
-              sellQuantity *
+              currentStock.quantity *
               (updateData.sellPrice || currentStock.purchasePrice),
           });
         } else {
-          // Update the quantity
+          // Partially sell - reduce quantity and adjust purchase price proportionally
           updateData.quantity = newQuantity;
+
+          // Keep the same purchase price per share, but the total invested amount will be reduced
+          // No need to change purchasePrice as it's per share
+
           delete updateData.sellQuantity; // Remove sellQuantity from update
           delete updateData.sellPrice; // Remove sellPrice from update
           console.log(
             `✏️ Reduced quantity: ${currentStock.quantity} → ${newQuantity} shares`
+          );
+          console.log(
+            `💰 New total investment: ${newQuantity} × ${
+              currentStock.purchasePrice
+            } = ₹${(newQuantity * currentStock.purchasePrice).toFixed(2)}`
           );
         }
       }
@@ -3062,6 +3071,8 @@ app.put(
           remainingQuantity: updatedStock.quantity,
           totalValue:
             sellQuantity * (req.body.sellPrice || updatedStock.purchasePrice),
+          newTotalInvestment:
+            updatedStock.quantity * updatedStock.purchasePrice,
         }),
       });
     } catch (error) {
