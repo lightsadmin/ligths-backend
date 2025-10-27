@@ -66,9 +66,14 @@ const investmentSchema = new mongoose.Schema({
   duration: { type: Number }, // Specific for Recurring Deposit
   goalId: { type: String }, // Add goalId field
   // Stock-specific fields
-  stockSymbol: { type: String }, // e.g., "AAPL", "MSFT"
-  stockQuantity: { type: Number }, // Number of shares (can be negative for sells)
-  stockPrice: { type: Number }, // Price per share when bought/sold
+  stockSymbol: { type: String }, // e.g., "AAPL", "MSFT" (legacy field)
+  stockQuantity: { type: Number }, // Number of shares (legacy field)
+  stockPrice: { type: Number }, // Price per share (legacy field)
+  // New stock fields (preferred)
+  symbol: { type: String }, // Stock symbol
+  quantity: { type: Number }, // Number of shares
+  purchasePrice: { type: Number }, // Price per share when bought
+  exchange: { type: String }, // Exchange (NSE, BSE, etc.)
   // Mutual Fund specific fields
   schemeCode: { type: String }, // MF scheme code
   schemeName: { type: String }, // Full scheme name
@@ -2379,6 +2384,11 @@ app.post("/investment", verifyToken, async (req, res) => {
       sipDate,
       calculationType,
       investmentDate,
+      // Stock specific fields
+      symbol,
+      quantity,
+      purchasePrice,
+      exchange,
     } = req.body;
 
     // Basic validation
@@ -2400,6 +2410,16 @@ app.post("/investment", verifyToken, async (req, res) => {
         return res.status(400).json({
           error:
             "Missing required Mutual Fund fields: schemeCode, schemeName, units, nav",
+        });
+      }
+    }
+
+    // Additional validation for Stock investments
+    if (investmentType === "stock") {
+      if (!symbol || !quantity || !purchasePrice) {
+        return res.status(400).json({
+          error:
+            "Missing required Stock fields: symbol, quantity, purchasePrice",
         });
       }
     }
@@ -2439,6 +2459,21 @@ app.post("/investment", verifyToken, async (req, res) => {
         investmentData.currentAmount =
           investmentData.units * investmentData.currentNAV;
       }
+    }
+
+    // Add Stock specific fields if it's a Stock investment
+    if (investmentType === "stock") {
+      investmentData.symbol = symbol.toUpperCase();
+      investmentData.quantity = parseFloat(quantity);
+      investmentData.purchasePrice = parseFloat(purchasePrice);
+      investmentData.exchange = exchange || "NSE";
+      investmentData.investmentDate = investmentDate
+        ? new Date(investmentDate)
+        : new Date();
+
+      // For stocks, the current amount is the total investment (quantity * purchasePrice)
+      // This will be updated later with real-time prices
+      investmentData.currentAmount = investmentData.quantity * investmentData.purchasePrice;
     }
 
     const newInvestment = new Investment(investmentData);
