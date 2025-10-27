@@ -2473,7 +2473,8 @@ app.post("/investment", verifyToken, async (req, res) => {
 
       // For stocks, the current amount is the total investment (quantity * purchasePrice)
       // This will be updated later with real-time prices
-      investmentData.currentAmount = investmentData.quantity * investmentData.purchasePrice;
+      investmentData.currentAmount =
+        investmentData.quantity * investmentData.purchasePrice;
     }
 
     const newInvestment = new Investment(investmentData);
