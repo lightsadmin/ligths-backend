@@ -111,13 +111,13 @@ const stockPortfolioSchema = new mongoose.Schema({
 
 const StockPortfolio = mongoose.model("StockPortfolio", stockPortfolioSchema);
 
-// 📌 Define Goal Schema
+
 const goalSchema = new mongoose.Schema({
-  // goalSchema is defined here FIRST
+
   userName: { type: String, required: true },
   name: { type: String, required: true },
   customName: { type: String },
-  description: { type: String }, // Added this in previous step
+  description: { type: String },
   presentCost: { type: Number, required: true },
   childCurrentAge: { type: Number },
   goalAge: { type: Number },
